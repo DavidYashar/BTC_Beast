@@ -1,0 +1,33 @@
+{
+  "name": "utxo-beast",
+  "version": "1.0.0",
+  "description": "UTXO_Beast — RAG-enabled AI agent for UTXO.fun on Twitter/X",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "db:init": "tsx src/memory/init-db.ts",
+    "db:ingest": "tsx src/memory/ingest-knowledge.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.1",
+    "node-cron": "^3.0.3",
+    "openai": "^4.77.0",
+    "pg": "^8.13.1",
+    "pgvector": "^0.2.0",
+    "rettiwt-api": "^4.2.0",
+    "tsx": "^4.19.2",
+    "uuid": "^11.0.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.11.10",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.7.3"
+  }
+}
