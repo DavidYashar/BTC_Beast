@@ -38,14 +38,38 @@ export async function initDb() {
     )
   `);
 
-  // Tweets posted by the agent
+  // Tweets posted by the agent (with embedding for dedup)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tweets_posted (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tweet_id TEXT UNIQUE NOT NULL,
       content TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'trending',
+      embedding vector(1536),
       metadata JSONB DEFAULT '{}',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Add embedding column if missing (for existing DBs migrating from v1)
+  await pool.query(`
+    ALTER TABLE tweets_posted ADD COLUMN IF NOT EXISTS embedding vector(1536)
+  `).catch(() => {});
+
+  // Token snapshots — track token progress over time
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS token_snapshots (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      ticker TEXT NOT NULL,
+      name TEXT NOT NULL,
+      address TEXT NOT NULL,
+      price_sats DOUBLE PRECISION NOT NULL DEFAULT 0,
+      tvl_sats DOUBLE PRECISION NOT NULL DEFAULT 0,
+      volume_24h_sats DOUBLE PRECISION NOT NULL DEFAULT 0,
+      price_change_24h_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      holders INTEGER NOT NULL DEFAULT 0,
+      bonding_progress_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      embedding vector(1536),
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
@@ -81,23 +105,36 @@ export async function initDb() {
     )
   `);
 
-  // Create vector similarity indexes
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_knowledge_embedding
-    ON knowledge USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 50)
-  `).catch(() => {
-    // IVFFlat needs rows to build — create after first ingest
-    console.log('Note: IVFFlat index deferred (needs data first). Will use sequential scan.');
-  });
+  // Drop old IVFFlat indexes (broken on empty/small tables) and recreate as HNSW
+  // HNSW works correctly regardless of row count, unlike IVFFlat which needs data to build centroids
+  for (const idx of [
+    'idx_knowledge_embedding',
+    'idx_memories_embedding',
+    'idx_tweets_embedding',
+    'idx_token_snapshots_embedding',
+  ]) {
+    await pool.query(`DROP INDEX IF EXISTS ${idx}`).catch(() => {});
+  }
 
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_memories_embedding
-    ON memories USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100)
-  `).catch(() => {
-    console.log('Note: Memories IVFFlat index deferred. Will use sequential scan.');
-  });
+    CREATE INDEX IF NOT EXISTS idx_knowledge_embedding_hnsw
+    ON knowledge USING hnsw (embedding vector_cosine_ops)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw
+    ON memories USING hnsw (embedding vector_cosine_ops)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tweets_embedding_hnsw
+    ON tweets_posted USING hnsw (embedding vector_cosine_ops)
+  `).catch(() => {});
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_token_snapshots_embedding_hnsw
+    ON token_snapshots USING hnsw (embedding vector_cosine_ops)
+  `).catch(() => {});
 
   // Regular indexes
   await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)');
@@ -105,6 +142,9 @@ export async function initDb() {
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tweets_type ON tweets_posted(type)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tweets_created ON tweets_posted(created_at DESC)');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_mentions_tweet ON mentions_handled(tweet_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_token_snapshots_ticker ON token_snapshots(ticker)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_token_snapshots_address ON token_snapshots(address)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_token_snapshots_created ON token_snapshots(created_at DESC)');
 
   console.log('Database initialized successfully.');
 }
