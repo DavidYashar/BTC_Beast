@@ -5,6 +5,7 @@ import { createCommandServer } from './commands/webhook.js';
 import { postTrendingTweet } from './twitter/post-trending.js';
 import { handleMentions } from './twitter/mention-handler.js';
 import { engageWithMentions } from './twitter/engagement.js';
+import { initWallet, getSparkAddress } from './utxo-api/wallet.js';
 
 const PORT = parseInt(process.env.PORT || '10000', 10);
 
@@ -19,6 +20,15 @@ async function main() {
   // Initialize database tables
   await initDb();
   console.log('Database initialized.');
+
+  // Initialize wallet (restore from PG or provision new)
+  try {
+    const walletInfo = await initWallet();
+    console.log(`🔐 Wallet ready: ${walletInfo.address} (${walletInfo.network})`);
+  } catch (err) {
+    console.error('⚠️ Wallet init failed (trading disabled):', err);
+    console.error('Agent will continue with read-only mode (trending tweets only).');
+  }
 
   // Start the command webhook server
   const app = createCommandServer();

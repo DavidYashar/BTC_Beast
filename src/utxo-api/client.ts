@@ -1,6 +1,8 @@
+import { getSessionToken, handleAuthError } from './wallet.js';
+
 const BASE_URL = process.env.UTXO_API_BASE_URL || 'https://utxo.fun/api/agent';
 
-const HEADERS = {
+const HEADERS: Record<string, string> = {
   'User-Agent': 'BTCBeast/1.0 (https://utxo.fun)',
   'Accept': 'application/json',
 };
@@ -122,4 +124,152 @@ export function formatTokenInfoForPrompt(t: TokenInfo): string {
     t.description ? `Description: ${t.description}` : '',
     `Trade: ${t.links.trade}`,
   ].filter(Boolean).join('\n');
+}
+
+// ─── Authenticated API Calls (require wallet session) ───
+
+/** Helper: make an authenticated request with auto-retry on 401 */
+async function authFetch(urlPath: string, opts: RequestInit = {}): Promise<Response> {
+  const token = await getSessionToken();
+  const headers: Record<string, string> = {
+    ...HEADERS,
+    'Authorization': `Bearer ${token}`,
+    ...(opts.headers as Record<string, string> || {}),
+  };
+
+  let res = await fetch(`${BASE_URL}${urlPath}`, { ...opts, headers });
+
+  // Auto-retry once on 401 (session expired)
+  if (res.status === 401) {
+    const newToken = await handleAuthError();
+    headers['Authorization'] = `Bearer ${newToken}`;
+    res = await fetch(`${BASE_URL}${urlPath}`, { ...opts, headers });
+  }
+
+  return res;
+}
+
+// ─── Balance ───
+
+export interface BalanceResponse {
+  ok: boolean;
+  address: string;
+  balance_sats: number;
+  token_holdings: Array<{ token_id: string; balance: string }>;
+}
+
+export async function fetchBalance(): Promise<BalanceResponse> {
+  const res = await authFetch('/wallet/balance');
+  if (!res.ok) throw new Error(`Balance API ${res.status}: ${await res.text()}`);
+  return (await res.json()) as BalanceResponse;
+}
+
+// ─── Swap (Buy/Sell) ───
+
+export interface SwapRequest {
+  token: string;
+  action: 'buy' | 'sell';
+  amount: number;
+}
+
+export interface SwapResult {
+  success: boolean;
+  result: {
+    type: 'swap';
+    action: 'buy' | 'sell';
+    token: string;
+    amount_in: string;
+    amount_out: string;
+    tx_id: string;
+    pool_id: string;
+  };
+}
+
+export async function executeSwap(params: SwapRequest): Promise<SwapResult> {
+  const res = await authFetch('/swap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Swap API ${res.status}: ${await res.text()}`);
+  return (await res.json()) as SwapResult;
+}
+
+// ─── Token Launch ───
+
+export interface LaunchRequest {
+  name: string;
+  ticker: string;
+  supply: number;
+  decimals: number;
+}
+
+export interface LaunchResult {
+  success: boolean;
+  result: {
+    type: 'launch';
+    token_address: string;
+    name: string;
+    ticker: string;
+    supply: number;
+    decimals: number;
+    pool_id: string;
+    trade_url: string;
+    issuer_address: string;
+  };
+}
+
+export async function launchToken(params: LaunchRequest): Promise<LaunchResult> {
+  const res = await authFetch('/token/launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Launch API ${res.status}: ${await res.text()}`);
+  return (await res.json()) as LaunchResult;
+}
+
+// ─── Chat Message ───
+
+export interface ChatRequest {
+  coinId: string;
+  message: string;
+  parentId?: string;
+}
+
+export interface ChatResult {
+  success: boolean;
+  data: {
+    messageId: string;
+    coinId: string;
+    sparkAddress: string;
+  };
+}
+
+export async function postChatMessage(params: ChatRequest): Promise<ChatResult> {
+  const res = await authFetch('/chat/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Chat API ${res.status}: ${await res.text()}`);
+  return (await res.json()) as ChatResult;
+}
+
+// ─── Format helpers for trading context ───
+
+export function formatBalanceForPrompt(balance: BalanceResponse): string {
+  const lines = [
+    `Wallet: ${balance.address}`,
+    `BTC Balance: ${balance.balance_sats} sats`,
+  ];
+  if (balance.token_holdings.length > 0) {
+    lines.push('Token Holdings:');
+    for (const h of balance.token_holdings) {
+      lines.push(`  ${h.token_id}: ${h.balance} units`);
+    }
+  } else {
+    lines.push('Token Holdings: none');
+  }
+  return lines.join('\n');
 }

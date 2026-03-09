@@ -3,3 +3,11 @@ dist/
 .env
 .env.local
 *.log
+
+# Wallet secrets (never commit)
+.wallet.json
+.wallet.key
+.session.json
+skills/utxo_wallet/.wallet.json
+skills/utxo_wallet/.wallet.key
+skills/utxo_wallet/.session.json

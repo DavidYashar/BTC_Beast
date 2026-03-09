@@ -22,6 +22,8 @@ services:
         sync: false
       - key: UTXO_API_BASE_URL
         value: https://utxo.fun/api/agent
+      - key: SPARK_AGENT_NETWORK
+        value: MAINNET
       - key: OPERATOR_SECRET
         sync: false
       - key: TRENDING_CRON
