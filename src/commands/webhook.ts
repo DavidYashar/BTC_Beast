@@ -5,6 +5,16 @@ import { SYSTEM_PROMPT } from '../personality/prompts.js';
 import { postTweet } from '../twitter/client.js';
 import { recordTweet, remember } from '../memory/store.js';
 import { pool } from '../memory/db.js';
+import { initWallet, getSparkAddress } from '../utxo-api/wallet.js';
+import {
+  fetchBalance,
+  executeSwap,
+  launchToken,
+  postChatMessage,
+  fetchTokenInfo,
+  formatBalanceForPrompt,
+  formatTokenInfoForPrompt,
+} from '../utxo-api/client.js';
 
 const OPERATOR_SECRET = process.env.OPERATOR_SECRET || '';
 
@@ -137,6 +147,205 @@ export function createCommandServer(): express.Express {
         memories: memoriesRes.rows[0].count,
       });
     } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Wallet & Trading Commands ──
+
+  /**
+   * POST /commands/wallet
+   * Provision a new wallet or check current wallet status.
+   * Body: {} (empty) — returns current wallet, provisions if none exists
+   */
+  app.post('/commands/wallet', async (req, res) => {
+    try {
+      const address = getSparkAddress();
+      if (address) {
+        // Wallet already exists — return info
+        const balance = await fetchBalance();
+        await pool.query(
+          `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+          ['wallet', '{}', JSON.stringify({ address, balance_sats: balance.balance_sats })],
+        );
+        res.json({ ok: true, status: 'connected', address, balance_sats: balance.balance_sats, token_holdings: balance.token_holdings });
+        return;
+      }
+
+      // No wallet — provision one
+      console.log('[commands] Provisioning wallet via operator command...');
+      const walletInfo = await initWallet();
+
+      await pool.query(
+        `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+        ['wallet', JSON.stringify({ action: 'provision' }), JSON.stringify(walletInfo)],
+      );
+
+      res.json({ ok: true, status: 'provisioned', address: walletInfo.address, network: walletInfo.network });
+    } catch (err: any) {
+      console.error('[commands] Wallet error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /commands/balance
+   * Check wallet balance (sats + token holdings).
+   */
+  app.post('/commands/balance', async (_req, res) => {
+    try {
+      const balance = await fetchBalance();
+
+      await pool.query(
+        `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+        ['balance', '{}', JSON.stringify(balance)],
+      );
+
+      res.json(balance);
+    } catch (err: any) {
+      console.error('[commands] Balance error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /commands/swap
+   * Buy or sell a token.
+   * Body: { "action": "buy"|"sell", "token": "btkn1...", "amount": number }
+   *   - buy:  amount = sats to spend  (1 USDB = 1000 sats)
+   *   - sell: amount = token base units to sell
+   */
+  app.post('/commands/swap', async (req, res) => {
+    try {
+      const { action, token, amount } = req.body;
+
+      if (!action || !['buy', 'sell'].includes(action)) {
+        res.status(400).json({ error: 'Provide "action" as "buy" or "sell"' });
+        return;
+      }
+      if (!token) {
+        res.status(400).json({ error: 'Provide "token" address (btkn1...)' });
+        return;
+      }
+      if (!amount || typeof amount !== 'number' || amount <= 0) {
+        res.status(400).json({ error: 'Provide positive "amount" (sats for buy, token units for sell)' });
+        return;
+      }
+
+      console.log(`[commands] Swap: ${action} ${amount} on ${token}`);
+      const result = await executeSwap({ token, action, amount });
+
+      // Store in RAG memory for learning
+      const memoryText = `Trade executed: ${action} ${token} — spent ${result.result.amount_in}, received ${result.result.amount_out}`;
+      await remember(memoryText, 'trade');
+
+      await pool.query(
+        `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+        ['swap', JSON.stringify(req.body), JSON.stringify(result)],
+      );
+
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error('[commands] Swap error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /commands/launch
+   * Launch a new token on UTXO.fun.
+   * Body: { "name": "...", "ticker": "...", "supply": number, "decimals": number }
+   */
+  app.post('/commands/launch', async (req, res) => {
+    try {
+      const { name, ticker, supply, decimals } = req.body;
+
+      if (!name || !ticker) {
+        res.status(400).json({ error: 'Provide "name" and "ticker"' });
+        return;
+      }
+      if (!supply || typeof supply !== 'number' || supply <= 0) {
+        res.status(400).json({ error: 'Provide positive "supply"' });
+        return;
+      }
+
+      const params = {
+        name,
+        ticker: ticker.toUpperCase(),
+        supply,
+        decimals: typeof decimals === 'number' ? decimals : 6,
+      };
+
+      console.log(`[commands] Launching token: ${params.ticker} (${params.name})`);
+      const result = await launchToken(params);
+
+      // Store in RAG memory
+      const memoryText = `Launched token: ${params.ticker} (${params.name}) — address: ${result.result.token_address}, trade: ${result.result.trade_url}`;
+      await remember(memoryText, 'token_launch');
+
+      await pool.query(
+        `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+        ['launch', JSON.stringify(params), JSON.stringify(result)],
+      );
+
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error('[commands] Launch error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /commands/chat
+   * Post a message on a token's chat page.
+   * Body: { "coinId": "btkn1...", "message": "..." }
+   */
+  app.post('/commands/chat', async (req, res) => {
+    try {
+      const { coinId, message, parentId } = req.body;
+
+      if (!coinId) {
+        res.status(400).json({ error: 'Provide "coinId" (token address)' });
+        return;
+      }
+      if (!message) {
+        res.status(400).json({ error: 'Provide "message"' });
+        return;
+      }
+
+      console.log(`[commands] Chat on ${coinId}: ${message.slice(0, 50)}...`);
+      const result = await postChatMessage({ coinId, message, parentId });
+
+      await pool.query(
+        `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+        ['chat', JSON.stringify(req.body), JSON.stringify(result)],
+      );
+
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error('[commands] Chat error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /commands/token-info
+   * Get detailed info about a specific token.
+   * Body: { "address": "btkn1..." }
+   */
+  app.post('/commands/token-info', async (req, res) => {
+    try {
+      const { address } = req.body;
+
+      if (!address) {
+        res.status(400).json({ error: 'Provide "address" (btkn1...)' });
+        return;
+      }
+
+      const info = await fetchTokenInfo(address);
+      res.json({ ok: true, token: info });
+    } catch (err: any) {
+      console.error('[commands] Token info error:', err);
       res.status(500).json({ error: err.message });
     }
   });
