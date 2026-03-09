@@ -15,7 +15,7 @@ import {
 } from './wallet-store.js';
 
 const SKILLS_DIR = path.resolve('skills/utxo_wallet');
-const WALLET_CONNECT_SCRIPT = path.join(SKILLS_DIR, 'scripts', 'wallet-connect.js');
+const WALLET_CONNECT_SCRIPT = path.join(SKILLS_DIR, 'scripts', 'wallet-connect.cjs');
 const BASE_URL = process.env.UTXO_API_BASE_URL?.replace(/\/api\/agent\/?$/, '') || 'https://utxo.fun';
 
 // Session expires after 15 min idle; refresh if less than 5 min remain
