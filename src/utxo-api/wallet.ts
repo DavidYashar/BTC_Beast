@@ -99,7 +99,10 @@ export async function initWallet(): Promise<{ address: string; network: string }
  */
 async function refreshSession(): Promise<void> {
   console.log('[wallet] Refreshing session...');
-  const output = await runWalletConnect([]);
+  // Use --force to skip pre-emptive disconnect of the old session.
+  // Without it, wallet-connect.cjs disconnects the existing session on the
+  // server before creating a new one — but Beast needs continuous sessions.
+  const output = await runWalletConnect(['--skip-disconnect']);
   console.log('[wallet] Connect output:', output);
 
   // Back up the new session file

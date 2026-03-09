@@ -94,6 +94,7 @@ function parseArgs() {
     let disconnect = false;
     let force = false;
     let provision = false;
+    let skipDisconnect = false;
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--wallet' && args[i + 1]) {
             walletPath = path.resolve(args[++i]);
@@ -110,6 +111,9 @@ function parseArgs() {
         else if (args[i] === '--provision') {
             provision = true;
         }
+        else if (args[i] === '--skip-disconnect') {
+            skipDisconnect = true;
+        }
     }
     // Validate base URL to prevent connecting to malicious servers
     if (!isAllowedBaseUrl(baseUrl)) {
@@ -120,7 +124,7 @@ function parseArgs() {
     }
     // Session file lives next to wallet file
     const sessionPath = path.join(path.dirname(walletPath), '.session.json');
-    return { walletPath, baseUrl, disconnect, force, provision, sessionPath };
+    return { walletPath, baseUrl, disconnect, force, provision, skipDisconnect, sessionPath };
 }
 // ---------------------------------------------------------------------------
 // Base URL validation
@@ -439,7 +443,7 @@ async function doConnect(walletPath, baseUrl, sessionPath) {
 // Main — auto-detects provision vs connect
 // ---------------------------------------------------------------------------
 async function main() {
-    const { walletPath, baseUrl, disconnect, force, provision, sessionPath } = parseArgs();
+    const { walletPath, baseUrl, disconnect, force, provision, skipDisconnect, sessionPath } = parseArgs();
     if (disconnect) {
         await doDisconnect(baseUrl, sessionPath);
         return;
@@ -479,7 +483,7 @@ async function main() {
     else if (force) {
         // --force (without --provision): force reconnect even if session looks valid
         console.log(`--force: forcing reconnect for wallet ${walletPath}`);
-        if (fs.existsSync(sessionPath)) {
+        if (fs.existsSync(sessionPath) && !skipDisconnect) {
             console.log('Existing session found. Disconnecting first...');
             await doDisconnect(baseUrl, sessionPath);
             console.log('');
@@ -488,7 +492,7 @@ async function main() {
     }
     else {
         // Wallet exists → reconnect with it
-        if (fs.existsSync(sessionPath)) {
+        if (fs.existsSync(sessionPath) && !skipDisconnect) {
             console.log('Existing session found. Disconnecting first...');
             await doDisconnect(baseUrl, sessionPath);
             console.log('');
