@@ -162,13 +162,24 @@ export function createCommandServer(): express.Express {
     try {
       const address = getSparkAddress();
       if (address) {
-        // Wallet already exists — return info
-        const balance = await fetchBalance();
+        // Wallet exists — return address immediately, try balance but don't block
+        let balance_sats = 0;
+        let token_holdings = {};
+        try {
+          const balance = await Promise.race([
+            fetchBalance(),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 15_000)),
+          ]);
+          balance_sats = balance.balance_sats;
+          token_holdings = balance.token_holdings;
+        } catch {
+          // Balance unavailable (session stale or timeout) — still return address
+        }
         await pool.query(
           `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
-          ['wallet', '{}', JSON.stringify({ address, balance_sats: balance.balance_sats })],
+          ['wallet', '{}', JSON.stringify({ address, balance_sats })],
         );
-        res.json({ ok: true, status: 'connected', address, balance_sats: balance.balance_sats, token_holdings: balance.token_holdings });
+        res.json({ ok: true, status: 'connected', address, balance_sats, token_holdings });
         return;
       }
 
