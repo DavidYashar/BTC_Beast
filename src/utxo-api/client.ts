@@ -202,6 +202,12 @@ export interface LaunchRequest {
   ticker: string;
   supply: number;
   decimals: number;
+  initialBuyAmountSats?: number;
+  bio?: string;
+  x?: string;
+  website?: string;
+  telegram?: string;
+  imageUrl?: string;
 }
 
 export interface LaunchResult {
@@ -216,6 +222,12 @@ export interface LaunchResult {
     pool_id: string;
     trade_url: string;
     issuer_address: string;
+    issuer_public_key?: string;
+    initial_buy?: {
+      accepted: boolean;
+      amountOut?: string;
+      error?: string;
+    } | null;
   };
 }
 

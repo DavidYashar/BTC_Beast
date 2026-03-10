@@ -265,11 +265,14 @@ export function createCommandServer(): express.Express {
   /**
    * POST /commands/launch
    * Launch a new token on UTXO.fun.
-   * Body: { "name": "...", "ticker": "...", "supply": number, "decimals": number }
+   * Body: { "name": "...", "ticker": "...", "supply": number, "decimals": number,
+   *         "initialBuyAmountSats": number (optional), "bio": string (optional),
+   *         "x": string (optional), "website": string (optional),
+   *         "telegram": string (optional), "imageUrl": string (optional) }
    */
   app.post('/commands/launch', async (req, res) => {
     try {
-      const { name, ticker, supply, decimals } = req.body;
+      const { name, ticker, supply, decimals, initialBuyAmountSats, bio, x, website, telegram, imageUrl } = req.body;
 
       if (!name || !ticker) {
         res.status(400).json({ error: 'Provide "name" and "ticker"' });
@@ -280,15 +283,25 @@ export function createCommandServer(): express.Express {
         return;
       }
 
-      const params = {
+      const params: Record<string, unknown> = {
         name,
         ticker: ticker.toUpperCase(),
         supply,
         decimals: typeof decimals === 'number' ? decimals : 6,
       };
 
-      console.log(`[commands] Launching token: ${params.ticker} (${params.name})`);
-      const result = await launchToken(params);
+      // Pass through optional fields
+      if (typeof initialBuyAmountSats === 'number' && initialBuyAmountSats > 0) {
+        params.initialBuyAmountSats = initialBuyAmountSats;
+      }
+      if (bio) params.bio = bio;
+      if (x) params.x = x;
+      if (website) params.website = website;
+      if (telegram) params.telegram = telegram;
+      if (imageUrl) params.imageUrl = imageUrl;
+
+      console.log(`[commands] Launching token: ${params.ticker} (${params.name})${params.initialBuyAmountSats ? ` with initial buy: ${params.initialBuyAmountSats} sats` : ''}`);
+      const result = await launchToken(params as any);
 
       // Store in RAG memory
       const memoryText = `Launched token: ${params.ticker} (${params.name}) — address: ${result.result.token_address}, trade: ${result.result.trade_url}`;
