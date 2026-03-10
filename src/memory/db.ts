@@ -6,9 +6,18 @@ let _pool: pg.Pool | null = null;
 
 export function getPool(): pg.Pool {
   if (!_pool) {
+    const isProduction = process.env.NODE_ENV === 'production';
+    let ssl: pg.PoolConfig['ssl'] = false;
+    if (isProduction) {
+      // Render's managed Postgres uses self-signed certs on internal networking.
+      // Pin the CA cert via DATABASE_CA_CERT env var if available; otherwise
+      // accept the self-signed cert (connection is still TLS-encrypted).
+      const ca = process.env.DATABASE_CA_CERT;
+      ssl = ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
+    }
     _pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false,
+      ssl,
       max: 10,
       idleTimeoutMillis: 30000,
     });
