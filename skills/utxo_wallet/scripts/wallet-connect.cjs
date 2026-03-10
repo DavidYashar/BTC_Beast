@@ -379,9 +379,9 @@ async function doConnect(walletPath, baseUrl, sessionPath) {
         mnemonic = decryptMnemonicAtRest(walletData.encrypted_mnemonic, walletKeyPath);
     }
     else if (walletData.mnemonic) {
-        // Legacy plaintext wallet — still works but warn
-        console.warn('WARNING: Wallet has plaintext mnemonic. Re-provision to upgrade to encrypted storage.');
-        mnemonic = walletData.mnemonic;
+        // Legacy plaintext wallet — refuse to use it
+        console.error('ERROR: Wallet has plaintext mnemonic. Re-provision to upgrade to encrypted storage.');
+        process.exit(1);
     }
     else {
         console.error('ERROR: Wallet file has no mnemonic (encrypted or plaintext).');
