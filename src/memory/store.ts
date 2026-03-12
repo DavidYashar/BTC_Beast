@@ -45,12 +45,13 @@ interface RecallResult {
   text: string;
   source: string;
   similarity: number;
-  table: 'knowledge' | 'memories';
+  table: 'knowledge' | 'memories' | 'tweets_posted' | 'token_snapshots';
 }
 
 export async function recall(
   query: string,
   limit: number = 5,
+  minSimilarity: number = 0.3,
 ): Promise<RecallResult[]> {
   const embedding = await embedText(query);
   const vec = toSql(embedding);
@@ -103,11 +104,12 @@ export async function recall(
   const results: RecallResult[] = [
     ...knowledgeRes.rows.map((r: any) => ({ ...r, table: 'knowledge' as const })),
     ...memoriesRes.rows.map((r: any) => ({ ...r, table: 'memories' as const })),
-    ...tweetsRes.rows.map((r: any) => ({ ...r, table: 'knowledge' as const })),
-    ...tokenRes.rows.map((r: any) => ({ ...r, table: 'knowledge' as const })),
+    ...tweetsRes.rows.map((r: any) => ({ ...r, table: 'tweets_posted' as const })),
+    ...tokenRes.rows.map((r: any) => ({ ...r, table: 'token_snapshots' as const })),
   ];
 
   return results
+    .filter((r) => r.similarity >= minSimilarity)
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, limit);
 }
@@ -297,4 +299,68 @@ export async function setState(key: string, value: string): Promise<void> {
      ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
     [key, value],
   );
+}
+
+// ──────────────────────────────────────────────
+// Memory pruning
+// ──────────────────────────────────────────────
+
+interface PruneResult {
+  memories: number;
+  tweets: number;
+  snapshots: number;
+  mentions: number;
+}
+
+/**
+ * Prune old data to keep tables from growing unbounded.
+ * - memories: keep last `maxMemories` rows
+ * - tweets_posted: keep last `maxTweets` rows
+ * - token_snapshots: delete older than `snapshotDays` days
+ * - mentions_handled: delete older than `mentionDays` days
+ */
+export async function pruneMemories(
+  maxMemories: number = 500,
+  maxTweets: number = 300,
+  snapshotDays: number = 30,
+  mentionDays: number = 30,
+): Promise<PruneResult> {
+  // Prune memories — keep the newest `maxMemories`
+  const memRes = await pool.query(
+    `DELETE FROM memories
+     WHERE id NOT IN (
+       SELECT id FROM memories ORDER BY created_at DESC LIMIT $1
+     )`,
+    [maxMemories],
+  );
+
+  // Prune tweets — keep the newest `maxTweets`
+  const tweetRes = await pool.query(
+    `DELETE FROM tweets_posted
+     WHERE id NOT IN (
+       SELECT id FROM tweets_posted ORDER BY created_at DESC LIMIT $1
+     )`,
+    [maxTweets],
+  );
+
+  // Prune old token snapshots
+  const snapRes = await pool.query(
+    `DELETE FROM token_snapshots
+     WHERE created_at < NOW() - make_interval(days => $1::int)`,
+    [snapshotDays],
+  );
+
+  // Prune old mention tracking rows
+  const mentionRes = await pool.query(
+    `DELETE FROM mentions_handled
+     WHERE created_at < NOW() - make_interval(days => $1::int)`,
+    [mentionDays],
+  );
+
+  return {
+    memories: memRes.rowCount ?? 0,
+    tweets: tweetRes.rowCount ?? 0,
+    snapshots: snapRes.rowCount ?? 0,
+    mentions: mentionRes.rowCount ?? 0,
+  };
 }

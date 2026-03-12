@@ -6,6 +6,7 @@ import { createCommandServer } from './commands/webhook.js';
 import { postTrendingTweet } from './twitter/post-trending.js';
 import { handleMentions } from './twitter/mention-handler.js';
 import { engageWithMentions } from './twitter/engagement.js';
+import { pruneMemories } from './memory/store.js';
 import { initWallet, getSparkAddress } from './utxo-api/wallet.js';
 import { cronTasks, type CronBehavior, type CronTaskInfo } from './cron-registry.js';
 
@@ -67,6 +68,15 @@ async function main() {
   registerCron('trending', TRENDING_CRON, postTrendingTweet);
   registerCron('mentions', MENTIONS_CRON, handleMentions);
   registerCron('engagement', ENGAGEMENT_CRON, engageWithMentions);
+
+  // Daily memory pruning at 3:00 AM UTC
+  registerCron('pruning', '0 3 * * *', async () => {
+    const result = await pruneMemories();
+    const total = result.memories + result.tweets + result.snapshots + result.mentions;
+    if (total > 0) {
+      console.log(`[pruning] Cleaned: ${result.memories} memories, ${result.tweets} tweets, ${result.snapshots} snapshots, ${result.mentions} mentions`);
+    }
+  });
 
   // Run initial tasks on startup (after a short delay)
   setTimeout(async () => {

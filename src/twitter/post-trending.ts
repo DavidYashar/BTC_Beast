@@ -27,7 +27,8 @@ export async function postTrendingTweet(): Promise<void> {
   const data = formatTrendingForPrompt(tokens);
 
   // Pull any relevant memories for richer context
-  const memories = await recall('trending tokens hot movers', 3);
+  const recallQuery = tokens.slice(0, 3).map(t => `${t.ticker} ${t.name}`).join(', ') + ' trending';
+  const memories = await recall(recallQuery, 3);
   const memoryContext = memories.length > 0
     ? '\n\nPrevious context:\n' + memories.map(m => m.text).join('\n')
     : '';
