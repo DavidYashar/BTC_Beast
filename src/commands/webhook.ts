@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import crypto from 'node:crypto';
 import { chat } from '../llm/client.js';
 import { SYSTEM_PROMPT } from '../personality/prompts.js';
@@ -51,7 +51,7 @@ export function createCommandServer(): express.Express {
   }));
 
   // Authentication middleware
-  app.use('/commands', (req: any, res, next) => {
+  app.use('/commands', (req: any, res: Response, next: NextFunction) => {
     const sig = req.headers['x-operator-signature'] as string | undefined;
     if (!verifyOperator(req.rawBody, sig)) {
       res.status(401).json({ error: 'Unauthorized' });
@@ -61,7 +61,7 @@ export function createCommandServer(): express.Express {
   });
 
   // Health check (no auth)
-  app.get('/health', (_req, res) => {
+  app.get('/health', (_req: Request, res: Response) => {
     res.json({ ok: true, agent: 'UTXO_Beast' });
   });
 
@@ -73,7 +73,7 @@ export function createCommandServer(): express.Express {
    * - text: post exactly this text
    * - prompt: generate tweet from this prompt
    */
-  app.post('/commands/tweet', async (req, res) => {
+  app.post('/commands/tweet', async (req: Request, res: Response) => {
     try {
       const { text, prompt } = req.body;
       let tweetText: string;
@@ -120,7 +120,7 @@ export function createCommandServer(): express.Express {
    * Body: { "content": "...", "type": "manual" }
    * Add a memory manually.
    */
-  app.post('/commands/remember', async (req, res) => {
+  app.post('/commands/remember', async (req: Request, res: Response) => {
     try {
       const { content, type = 'manual' } = req.body;
       if (!content) {
@@ -145,7 +145,7 @@ export function createCommandServer(): express.Express {
    * GET /commands/status
    * Get agent stats: tweets posted, mentions handled, uptime.
    */
-  app.get('/commands/status', async (_req, res) => {
+  app.get('/commands/status', async (_req: Request, res: Response) => {
     try {
       const [tweetsRes, mentionsRes, memoriesRes] = await Promise.all([
         pool.query('SELECT COUNT(*)::int AS count FROM tweets_posted'),
@@ -172,7 +172,7 @@ export function createCommandServer(): express.Express {
    * Provision a new wallet or check current wallet status.
    * Body: {} (empty) — returns current wallet, provisions if none exists
    */
-  app.post('/commands/wallet', async (req, res) => {
+  app.post('/commands/wallet', async (req: Request, res: Response) => {
     try {
       const address = getSparkAddress();
       if (address) {
@@ -217,7 +217,7 @@ export function createCommandServer(): express.Express {
    * POST /commands/balance
    * Check wallet balance (sats + token holdings).
    */
-  app.post('/commands/balance', async (_req, res) => {
+  app.post('/commands/balance', async (_req: Request, res: Response) => {
     try {
       const balance = await fetchBalance();
 
@@ -240,7 +240,7 @@ export function createCommandServer(): express.Express {
    *   - buy:  amount = sats to spend  (1 USDB = 1000 sats)
    *   - sell: amount = token base units to sell
    */
-  app.post('/commands/swap', async (req, res) => {
+  app.post('/commands/swap', async (req: Request, res: Response) => {
     try {
       const { action, token, amount } = req.body;
 
@@ -284,7 +284,7 @@ export function createCommandServer(): express.Express {
    *         "x": string (optional), "website": string (optional),
    *         "telegram": string (optional), "imageUrl": string (optional) }
    */
-  app.post('/commands/launch', async (req, res) => {
+  app.post('/commands/launch', async (req: Request, res: Response) => {
     try {
       const { name, ticker, supply, decimals, initialBuyAmountSats, bio, x, website, telegram, imageUrl } = req.body;
 
@@ -338,7 +338,7 @@ export function createCommandServer(): express.Express {
    * Post a message on a token's chat page.
    * Body: { "coinId": "btkn1...", "message": "..." }
    */
-  app.post('/commands/chat', async (req, res) => {
+  app.post('/commands/chat', async (req: Request, res: Response) => {
     try {
       const { coinId, message, parentId } = req.body;
 
@@ -371,7 +371,7 @@ export function createCommandServer(): express.Express {
    * Get detailed info about a specific token.
    * Body: { "address": "btkn1..." }
    */
-  app.post('/commands/token-info', async (req, res) => {
+  app.post('/commands/token-info', async (req: Request, res: Response) => {
     try {
       const { address } = req.body;
 
@@ -403,7 +403,7 @@ export function createCommandServer(): express.Express {
    * Body: { "behaviors": ["trending", "mentions", "engagement"] }
    *   - Omit behaviors or pass ["all"] to start everything.
    */
-  app.post('/commands/start-tweeting', async (req, res) => {
+  app.post('/commands/start-tweeting', async (req: Request, res: Response) => {
     try {
       const targets = parseBehaviors(req.body);
       const results: Record<string, string> = {};
@@ -442,7 +442,7 @@ export function createCommandServer(): express.Express {
    * Body: { "behaviors": ["trending", "mentions", "engagement"] }
    *   - Omit behaviors or pass ["all"] to stop everything.
    */
-  app.post('/commands/stop-tweeting', async (req, res) => {
+  app.post('/commands/stop-tweeting', async (req: Request, res: Response) => {
     try {
       const targets = parseBehaviors(req.body);
       const results: Record<string, string> = {};
@@ -479,7 +479,7 @@ export function createCommandServer(): express.Express {
    * GET /commands/cron-status
    * Show which cron behaviors are active/paused, their schedules, and last run info.
    */
-  app.get('/commands/cron-status', async (_req, res) => {
+  app.get('/commands/cron-status', async (_req: Request, res: Response) => {
     try {
       const behaviors: Record<string, {
         schedule: string;
