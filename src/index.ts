@@ -46,8 +46,14 @@ async function main() {
 
   // Helper to register a cron task in the registry
   function registerCron(name: CronBehavior, schedule: string, handler: () => Promise<void>) {
+    let executing = false;
     const info: CronTaskInfo = {
       task: cron.schedule(schedule, async () => {
+        if (executing) {
+          console.warn(`[cron] ${name} still running, skipping overlapping execution.`);
+          return;
+        }
+        executing = true;
         info.lastRunAt = new Date();
         try {
           await handler();
@@ -55,6 +61,8 @@ async function main() {
         } catch (err: any) {
           info.lastError = err?.message || String(err);
           console.error(`[cron] ${name} error:`, err);
+        } finally {
+          executing = false;
         }
       }),
       schedule,

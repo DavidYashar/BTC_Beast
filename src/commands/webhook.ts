@@ -19,6 +19,19 @@ import {
 
 const OPERATOR_SECRET = process.env.OPERATOR_SECRET || '';
 
+if (!OPERATOR_SECRET) {
+  console.warn('\u26a0\ufe0f  WARNING: OPERATOR_SECRET is not set. All operator commands will be rejected.');
+}
+
+/** Sanitize error messages to avoid leaking internal details. */
+function safeErrorMessage(err: any): string {
+  const msg = err?.message ?? String(err);
+  // Strip connection strings, file paths, and stack traces
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT/.test(msg)) return 'Service temporarily unavailable';
+  if (/password|connectionString|DATABASE_URL/i.test(msg)) return 'Internal server error';
+  return msg;
+}
+
 /**
  * Verify operator authentication via HMAC signature.
  * Header: X-Operator-Signature: sha256=<hex>
@@ -49,7 +62,7 @@ export function createCommandServer(): express.Express {
 
   // Health check (no auth)
   app.get('/health', (_req, res) => {
-    res.json({ ok: true, agent: 'UTXO_Beast', uptime: process.uptime() });
+    res.json({ ok: true, agent: 'UTXO_Beast' });
   });
 
   // ── Operator Commands ──
@@ -98,7 +111,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, tweetId, text: tweetText });
     } catch (err: any) {
       console.error('[commands] Tweet error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -124,7 +137,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true });
     } catch (err: any) {
       console.error('[commands] Remember error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -148,7 +161,7 @@ export function createCommandServer(): express.Express {
         memories: memoriesRes.rows[0].count,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -196,7 +209,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, status: 'provisioned', address: walletInfo.address, network: walletInfo.network });
     } catch (err: any) {
       console.error('[commands] Wallet error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -216,7 +229,7 @@ export function createCommandServer(): express.Express {
       res.json(balance);
     } catch (err: any) {
       console.error('[commands] Balance error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -259,7 +272,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, ...result });
     } catch (err: any) {
       console.error('[commands] Swap error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -316,7 +329,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, ...result });
     } catch (err: any) {
       console.error('[commands] Launch error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -349,7 +362,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, ...result });
     } catch (err: any) {
       console.error('[commands] Chat error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -371,7 +384,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, token: info });
     } catch (err: any) {
       console.error('[commands] Token info error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -419,7 +432,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, results });
     } catch (err: any) {
       console.error('[commands] start-tweeting error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -458,7 +471,7 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, results });
     } catch (err: any) {
       console.error('[commands] stop-tweeting error:', err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 
@@ -486,7 +499,7 @@ export function createCommandServer(): express.Express {
 
       res.json({ ok: true, behaviors });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: safeErrorMessage(err) });
     }
   });
 

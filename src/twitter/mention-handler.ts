@@ -62,7 +62,7 @@ export async function handleMentions(): Promise<void> {
       );
     } catch (err) {
       console.error(`[mentions] Error handling mention ${mention.id}:`, err);
-      await markMentionHandled(mention.id, null, { error: String(err) });
+      // Don't mark as handled — will retry on next cycle
     }
   }
 

@@ -60,7 +60,7 @@ export async function engageWithMentions(): Promise<void> {
       );
     } catch (err) {
       console.error(`[engagement] Error engaging with ${mention.id}:`, err);
-      await markMentionHandled(mention.id, null, { error: String(err) });
+      // Don't mark as handled — will retry on next cycle
     }
   }
 

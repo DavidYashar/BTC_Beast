@@ -2,7 +2,7 @@ import { chat } from '../llm/client.js';
 import { SYSTEM_PROMPT, TRENDING_TWEET_PROMPT } from '../personality/prompts.js';
 import { fetchTrending, formatTrendingForPrompt } from '../utxo-api/client.js';
 import { postTweet } from './client.js';
-import { recall, remember, recordTweet, isTweetTooSimilar, recordTokenSnapshots } from '../memory/store.js';
+import { recall, recordTweet, isTweetTooSimilar, recordTokenSnapshots } from '../memory/store.js';
 
 const MAX_DEDUP_RETRIES = 2;
 
@@ -73,17 +73,12 @@ export async function postTrendingTweet(): Promise<void> {
   console.log(`[trending] Posting: ${tweet}`);
   const tweetId = await postTweet(tweet);
 
-  // Record in DB (with embedding)
+  // Record in DB (with embedding for dedup + recall)
   await recordTweet(tweetId, tweet, 'trending', {
     tokenCount: tokens.length,
     topTicker: tokens[0]?.ticker,
+    featuredTokens: tokens.slice(0, 3).map(t => t.ticker),
   });
-
-  // Remember this interaction
-  await remember(
-    `Posted trending tweet: "${tweet}" — featured tokens: ${tokens.slice(0, 3).map(t => t.ticker).join(', ')}`,
-    'tweet_posted',
-  );
 
   console.log(`[trending] Posted tweet ${tweetId}`);
 }

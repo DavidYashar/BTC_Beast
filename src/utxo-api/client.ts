@@ -144,6 +144,9 @@ async function authFetch(urlPath: string, opts: RequestInit = {}): Promise<Respo
     const newToken = await handleAuthError();
     headers['Authorization'] = `Bearer ${newToken}`;
     res = await fetch(`${BASE_URL}${urlPath}`, { ...opts, headers });
+    if (res.status === 401) {
+      throw new Error('Authentication failed after token refresh — session may be invalid');
+    }
   }
 
   return res;
