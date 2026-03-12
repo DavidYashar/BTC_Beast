@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as crypto from 'node:crypto';
 import { pool } from './db.js';
 import { embedBatch, toSql } from './embeddings.js';
-import { initDb } from './init-db.js';
 
 const CHUNK_SIZE = 800; // characters per chunk (with overlap)
 const CHUNK_OVERLAP = 100;
@@ -22,18 +22,31 @@ function chunkText(text: string): string[] {
 }
 
 /**
- * Ingest all .md files from a directory into the knowledge table.
- * Clears existing knowledge first (idempotent re-deploy).
+ * Compute a hash of all knowledge files to detect changes.
  */
-async function ingestDirectory(dir: string): Promise<void> {
+function hashDirectory(dir: string): string {
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.md')).sort();
+  const hash = crypto.createHash('sha256');
+  for (const file of files) {
+    hash.update(file);
+    hash.update(fs.readFileSync(path.join(dir, file), 'utf-8'));
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * Ingest all .md files from a directory into the knowledge table.
+ */
+async function ingestDirectory(dir: string): Promise<number> {
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
-  console.log(`Found ${files.length} knowledge files in ${dir}`);
+  console.log(`[knowledge] Found ${files.length} knowledge files in ${dir}`);
+  let totalChunks = 0;
 
   for (const file of files) {
     const filePath = path.join(dir, file);
     const content = fs.readFileSync(filePath, 'utf-8');
     const chunks = chunkText(content);
-    console.log(`  ${file}: ${chunks.length} chunks`);
+    console.log(`[knowledge]   ${file}: ${chunks.length} chunks`);
 
     // Embed all chunks for this file in one batch call
     const embeddings = await embedBatch(chunks);
@@ -51,33 +64,50 @@ async function ingestDirectory(dir: string): Promise<void> {
         ],
       );
     }
+    totalChunks += chunks.length;
   }
+  return totalChunks;
 }
 
-async function main() {
-  console.log('Initializing database...');
-  await initDb();
-
-  // Clear old knowledge (idempotent)
-  await pool.query('DELETE FROM knowledge');
-  console.log('Cleared existing knowledge.');
-
+/**
+ * Load knowledge files into the database on startup.
+ * Only re-ingests when files have changed (compares content hash).
+ */
+export async function ingestKnowledge(): Promise<void> {
   const knowledgeDir = path.resolve(
     process.env.KNOWLEDGE_DIR || path.join(process.cwd(), 'knowledge'),
   );
 
   if (!fs.existsSync(knowledgeDir)) {
-    console.error(`Knowledge directory not found: ${knowledgeDir}`);
-    process.exit(1);
+    console.log('[knowledge] Knowledge directory not found, skipping ingestion.');
+    return;
   }
 
-  await ingestDirectory(knowledgeDir);
+  const currentHash = hashDirectory(knowledgeDir);
 
-  console.log('Knowledge ingestion complete.');
-  await pool.end();
+  // Check stored hash to avoid re-embedding on every restart
+  const res = await pool.query(
+    `SELECT value FROM agent_state WHERE key = 'knowledge_hash'`,
+  );
+  const storedHash = res.rows[0]?.value;
+
+  if (storedHash === currentHash) {
+    const countRes = await pool.query('SELECT COUNT(*)::int AS c FROM knowledge');
+    console.log(`[knowledge] Up to date (${countRes.rows[0].c} chunks). Skipping ingestion.`);
+    return;
+  }
+
+  console.log('[knowledge] Files changed — re-ingesting...');
+  await pool.query('DELETE FROM knowledge');
+
+  const totalChunks = await ingestDirectory(knowledgeDir);
+
+  // Store hash so we skip next time
+  await pool.query(
+    `INSERT INTO agent_state (key, value) VALUES ('knowledge_hash', $1)
+     ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+    [currentHash],
+  );
+
+  console.log(`[knowledge] Ingestion complete: ${totalChunks} chunks embedded.`);
 }
-
-main().catch(err => {
-  console.error('Ingestion failed:', err);
-  process.exit(1);
-});

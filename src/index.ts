@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import * as cron from 'node-cron';
 import { initDb } from './memory/init-db.js';
+import { ingestKnowledge } from './memory/ingest-knowledge.js';
 import { createCommandServer } from './commands/webhook.js';
 import { postTrendingTweet } from './twitter/post-trending.js';
 import { handleMentions } from './twitter/mention-handler.js';
@@ -21,6 +22,9 @@ async function main() {
   // Initialize database tables
   await initDb();
   console.log('Database initialized.');
+
+  // Load knowledge files into RAG (skips if unchanged)
+  await ingestKnowledge();
 
   // Initialize wallet (restore from PG or provision new)
   try {
