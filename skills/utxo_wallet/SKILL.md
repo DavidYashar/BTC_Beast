@@ -32,17 +32,17 @@ Covers: wallet provisioning, balance checks, token discovery (trending + info), 
 
 | File | Purpose |
 |------|---------|
-| `scripts/wallet-connect.js` | Provision new wallet OR reconnect existing one |
-| `scripts/api-call.js` | Make HTTP API calls (avoids Windows PowerShell curl issues) |
+| `scripts/wallet-connect.cjs` | Provision new wallet OR reconnect existing one |
+| `scripts/api-call.cjs` | Make HTTP API calls (avoids Windows PowerShell curl issues) |
 
 All scripts are pre-compiled JavaScript. They use Node.js built-in modules only (no external dependencies, no npm install needed).
 
 ## API Helper Usage
 
-All API calls use `api-call.js` to avoid shell escaping issues. Write JSON to a temp file, then call:
+All API calls use `api-call.cjs` to avoid shell escaping issues. Write JSON to a temp file, then call:
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js <METHOD> <PATH> [--body-file <file>] [--auth]
+exec node skills/utxo_wallet/scripts/api-call.cjs <METHOD> <PATH> [--body-file <file>] [--auth]
 ```
 
 Flags:
@@ -51,7 +51,7 @@ Flags:
 
 **To send a POST with JSON body:**
 1. Write JSON to a temp file (e.g., `body.json`)
-2. Run: `exec node skills/utxo_wallet/scripts/api-call.js POST /api/agent/token/launch --body-file body.json --auth`
+2. Run: `exec node skills/utxo_wallet/scripts/api-call.cjs POST /api/agent/token/launch --body-file body.json --auth`
 
 ## Quick Reference — API Endpoints
 
@@ -80,12 +80,12 @@ Before any operation, the agent needs an active session.
 
 ```
 1. Does .wallet.json exist?
-   ├─ NO  → Run wallet-connect.js --provision (creates a NEW wallet + connects)
+   ├─ NO  → Run wallet-connect.cjs --provision (creates a NEW wallet + connects)
    ├─ YES → Does .session.json exist?
-              ├─ NO  → Run wallet-connect.js (reconnects existing wallet)
+              ├─ NO  → Run wallet-connect.cjs (reconnects existing wallet)
               ├─ YES → Is connected_at less than 12 minutes ago?
                          ├─ YES → Session active, proceed
-                         ├─ NO  → Run wallet-connect.js to refresh
+                         ├─ NO  → Run wallet-connect.cjs to refresh
 ```
 
 > **IMPORTANT:** The `--provision` flag is REQUIRED to create a new wallet. Without it, the script will refuse and exit with an error. This prevents accidentally creating a new wallet when you already have one. Only use `--provision` for the very first connection.
@@ -94,26 +94,26 @@ Before any operation, the agent needs an active session.
 
 **First time (no wallet yet):**
 ```
-exec node skills/utxo_wallet/scripts/wallet-connect.js --provision
+exec node skills/utxo_wallet/scripts/wallet-connect.cjs --provision
 ```
 
 **Reconnect (wallet already exists):**
 ```
-exec node skills/utxo_wallet/scripts/wallet-connect.js
+exec node skills/utxo_wallet/scripts/wallet-connect.cjs
 ```
 
 Options: `--wallet <path>`, `--base-url <url>`, `--disconnect`, `--force`, `--provision`
 
 After running, `.session.json` contains `session_token` and `spark_address`.
 
-If any API returns **HTTP 401**, run wallet-connect.js again and retry.
+If any API returns **HTTP 401**, run wallet-connect.cjs again and retry.
 
 ---
 
 ## Step 2: Check Balance
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js GET /api/agent/wallet/balance
+exec node skills/utxo_wallet/scripts/api-call.cjs GET /api/agent/wallet/balance
 ```
 
 Response:
@@ -141,7 +141,7 @@ See what is hot on UTXO Exchange. Returns tokens in three categories:
 - **migrated** (Migrated) — Tokens that completed the bonding curve and trade on the full AMM
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js GET "/api/agent/trending?category=all&limit=10"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=all&limit=10"
 ```
 
 Parameters (query string):
@@ -162,8 +162,8 @@ Sort options:
 
 Examples:
 ```
-exec node skills/utxo_wallet/scripts/api-call.js GET "/api/agent/trending?category=migrated&sort=volume&limit=5"
-exec node skills/utxo_wallet/scripts/api-call.js GET "/api/agent/trending?category=new_pairs&sort=gainers&limit=10"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=migrated&sort=volume&limit=5"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=new_pairs&sort=gainers&limit=10"
 ```
 
 Response fields per token:
@@ -182,7 +182,7 @@ Response fields per token:
 Get detailed info on a specific token by address:
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js GET "/api/agent/token/info?address=btkn1..."
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/token/info?address=btkn1..."
 ```
 
 Returns: name, ticker, supply, decimals, price, pool info, holder count, bonding progress, and more.
@@ -210,7 +210,7 @@ Write a JSON file (e.g. `launch-body.json`):
 ```
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js POST /api/agent/token/launch --body-file launch-body.json --auth
+exec node skills/utxo_wallet/scripts/api-call.cjs POST /api/agent/token/launch --body-file launch-body.json --auth
 ```
 
 Response:
@@ -256,7 +256,7 @@ Write `buy-body.json`:
 `amount` is in sats for buy.
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js POST /api/agent/swap --body-file buy-body.json --auth
+exec node skills/utxo_wallet/scripts/api-call.cjs POST /api/agent/swap --body-file buy-body.json --auth
 ```
 
 Response:
@@ -289,7 +289,7 @@ Write `sell-body.json`:
 ```
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js POST /api/agent/swap --body-file sell-body.json --auth
+exec node skills/utxo_wallet/scripts/api-call.cjs POST /api/agent/swap --body-file sell-body.json --auth
 ```
 
 Response:
@@ -330,7 +330,7 @@ Write `chat-body.json`:
 - `parentId` — optional, for threaded replies (use a message ID)
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.js POST /api/agent/chat/message --body-file chat-body.json --auth
+exec node skills/utxo_wallet/scripts/api-call.cjs POST /api/agent/chat/message --body-file chat-body.json --auth
 ```
 
 Response:
@@ -350,7 +350,7 @@ Response:
 ## Complete Agent Workflow (Summary)
 
 ```
-1. Run wallet-connect.js → get session_token + spark_address
+1. Run wallet-connect.cjs → get session_token + spark_address
 2. Fund wallet: transfer sats to agent's spark_address
 3. Check balance via GET /api/agent/wallet/balance
 4. Launch token:
@@ -370,14 +370,14 @@ Response:
 - **Idle timeout**: 15 minutes with no API calls → session expires
 - **One session per agent**: Connecting again replaces the previous session
 - **Server restart**: All sessions are cleared — just reconnect
-- **401 = reconnect**: If any API returns 401, run wallet-connect.js and retry
+- **401 = reconnect**: If any API returns 401, run wallet-connect.cjs and retry
 
 ## Error Handling
 
 | Situation | Action |
 |-----------|--------|
-| `.wallet.json` not found | Run **wallet-connect.js --provision** to create a new wallet |
-| API returns 401 | Run **wallet-connect.js**, then retry |
+| `.wallet.json` not found | Run **wallet-connect.cjs --provision** to create a new wallet |
+| API returns 401 | Run **wallet-connect.cjs**, then retry |
 | Insufficient balance | Transfer sats to the agent's spark_address, then check balance |
 | Swap fails | Tokens/sats remain in your wallet — check balance and retry |
 | Launch fails | Report the exact error to the user and retry |
@@ -387,7 +387,7 @@ Response:
 
 - **DO NOT** modify the scripts — the crypto must remain audited
 - **DO NOT** write your own handshake or encryption code
-- **DO NOT** send the mnemonic in any request other than through wallet-connect.js
+- **DO NOT** send the mnemonic in any request other than through wallet-connect.cjs
 - **DO NOT** print the session token in full — show only first 16 chars
 - **DO NOT** print or reveal the mnemonic, seed phrase, or wallet JSON/key contents
 - **DO NOT** pass JSON body as a CLI argument — always use `--body-file`
@@ -400,5 +400,5 @@ Response:
 - **UTXO_ALLOW_CUSTOM_BASE_URL override**: Setting this to `1` disables the allowlist and permits connections to any host. **Only enable this if you fully trust the target host.** It is off by default and the agent should never set it autonomously.
 - **Sensitive files**: The skill writes `.wallet.json`, `.wallet.key`, and `.session.json` into the workspace. These contain encryption keys and session tokens. Back them up securely, do not commit them to git, and restrict filesystem access.
 - **Pre-compiled scripts**: The published `.js` files are compiled from the included `.ts` source. No `npx tsx` or npm fetches happen at runtime — only Node.js >= 18 is required. If you want to verify the JS matches the TS source, compile with `tsc --target ES2022 --module nodenext --moduleResolution nodenext --esModuleInterop --skipLibCheck`.
-- **Path traversal protection**: The `--body-file` flag in `api-call.js` restricts file reads to under the current working directory to prevent an agent from reading arbitrary files.
+- **Path traversal protection**: The `--body-file` flag in `api-call.cjs` restricts file reads to under the current working directory to prevent an agent from reading arbitrary files.
 - **Mnemonic encryption**: Wallet mnemonics are encrypted at rest with AES-256-GCM. The encryption key is stored in `.wallet.key` (hex, 32 bytes). Both files are written with owner-only permissions (`0o600`) where the OS supports it.

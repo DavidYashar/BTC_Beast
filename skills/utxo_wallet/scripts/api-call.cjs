@@ -163,7 +163,9 @@ async function main() {
     try {
         const res = await fetch(url, fetchOpts);
         clearTimeout(timeout);
-        const text = await res.text();
+        const raw = await res.text();
+        const MAX_RESPONSE_SIZE = 1024 * 1024; // 1 MB
+        const text = raw.length > MAX_RESPONSE_SIZE ? raw.slice(0, MAX_RESPONSE_SIZE) : raw;
         // Try to pretty-print JSON
         try {
             const json = JSON.parse(text);

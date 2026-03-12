@@ -237,6 +237,15 @@ async function performHandshake(baseUrl) {
     }
     const handshake = await hsRes.json();
     const { server_pubkey, nonce } = handshake;
+    // Validate nonce format (must be 64 hex chars = 32 bytes)
+    if (!nonce || typeof nonce !== 'string' || !/^[0-9a-f]{64}$/i.test(nonce)) {
+        console.error('ERROR: Handshake returned invalid nonce (expected 64 hex chars).');
+        process.exit(1);
+    }
+    if (!server_pubkey || typeof server_pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(server_pubkey)) {
+        console.error('ERROR: Handshake returned invalid server public key (expected 64 hex chars).');
+        process.exit(1);
+    }
     const agentKeypair = generateEphemeralKeypair();
     const sharedKey = deriveSharedKey(agentKeypair.privateKey, server_pubkey, nonce);
     return { agentKeypair, sharedKey, nonce };
@@ -385,6 +394,12 @@ async function doConnect(walletPath, baseUrl, sessionPath) {
     }
     else {
         console.error('ERROR: Wallet file has no mnemonic (encrypted or plaintext).');
+        process.exit(1);
+    }
+    // Validate decrypted mnemonic before sending
+    const wordCount = mnemonic.trim().split(/\s+/).length;
+    if (wordCount !== 12 && wordCount !== 24) {
+        console.error(`ERROR: Decrypted mnemonic has ${wordCount} words (expected 12 or 24). Wallet file or key may be corrupted.`);
         process.exit(1);
     }
     console.log('Wallet loaded. Starting encrypted handshake...');
