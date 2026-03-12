@@ -18,7 +18,7 @@ metadata:
           description: "AES-256-GCM decryption key for .wallet.json"
           sensitive: true
         - path: .session.json
-          description: "Session token + connected address (expires after 15 min idle)"
+          description: "Session token + connected address (15 min idle timeout, 2 hour hard expiry)"
           sensitive: true
 ---
 
@@ -57,8 +57,8 @@ Flags:
 
 | Method | Endpoint | Auth | Purpose |
 |--------|----------|------|---------|
-| GET | `/api/agent/wallet/balance` | No | Check sats balance + token holdings |
-| GET | `/api/agent/trending` | No | Discover trending tokens (new pairs, migrating, migrated) with optional sort |
+| GET | `/api/agent/wallet/balance` | Bearer | Check sats balance + token holdings |
+| GET | `/api/agent/trending` | No | Discover trending tokens (new pairs, migrating, migrated, gainers, losers) with optional sort |
 | GET | `/api/agent/token/info?address=X` | No | Get detailed info on a specific token |
 | POST | `/api/agent/token/launch` | Bearer | Create a new token (single-step) |
 | POST | `/api/agent/swap` | Bearer | Buy or sell tokens (single-step) |
@@ -113,17 +113,18 @@ If any API returns **HTTP 401**, run wallet-connect.cjs again and retry.
 ## Step 2: Check Balance
 
 ```
-exec node skills/utxo_wallet/scripts/api-call.cjs GET /api/agent/wallet/balance
+exec node skills/utxo_wallet/scripts/api-call.cjs GET /api/agent/wallet/balance --auth
 ```
 
 Response:
 ```json
 {
-  "ok": true,
+  "success": true,
+  "network": "MAINNET",
   "address": "spark1...",
   "balance_sats": 150000,
   "token_holdings": [
-    { "token_id": "btkn1...", "balance": "1000000000" }
+    { "token_address": "btkn1...", "balance": "1000000000" }
   ]
 }
 ```
@@ -134,36 +135,44 @@ Response:
 
 ### Trending Tokens
 
-See what is hot on UTXO Exchange. Returns tokens in three categories:
+See what is hot on UTXO Exchange. Returns tokens in five categories:
 
 - **new_pairs** (New Pairs) — Recently launched tokens, still on the bonding curve
 - **migrating** (Migrating) — Tokens past 55% bonding progress, approaching migration to full AMM
 - **migrated** (Migrated) — Tokens that completed the bonding curve and trade on the full AMM
+- **gainers** — Tokens with the biggest price increase (real snapshot data, configurable timeframe)
+- **losers** — Tokens with the biggest price drop (real snapshot data, configurable timeframe)
 
 ```
 exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=all&limit=10"
 ```
 
 Parameters (query string):
-- `category`: `new_pairs` | `migrating` | `migrated` | `all` (default: `all`)
-- `limit`: 1 to 25 (default: 10)
+- `category`: `new_pairs` | `migrating` | `migrated` | `gainers` | `losers` | `all` (default: `all`)
+- `limit`: 1 to 50 (default: 10)
+- `offset`: 0+ (default: 0, for pagination)
 - `sort`: `default` | `volume` | `tvl` | `gainers` | `losers` (default: `default`)
+- `timeframe`: `1h` | `6h` | `12h` | `24h` (default: `24h`, used for gainers/losers categories)
 
 Default sort per category (when `sort=default`):
 - `new_pairs` — newest first (by creation time)
 - `migrating` — closest to migrating first (by bonding progress)
 - `migrated` — highest liquidity first (by TVL)
+- `gainers` — biggest price increase first (real price snapshot data)
+- `losers` — biggest price drop first (real price snapshot data)
 
 Sort options:
 - `volume` — highest 24h trading volume first
 - `tvl` — highest total value locked first
-- `gainers` — biggest 24h price increase first
-- `losers` — biggest 24h price drop first
+- `gainers` — biggest price increase first
+- `losers` — biggest price drop first
 
 Examples:
 ```
 exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=migrated&sort=volume&limit=5"
-exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=new_pairs&sort=gainers&limit=10"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=gainers&timeframe=1h&limit=10"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=losers&timeframe=6h&limit=10"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=all&limit=5&offset=10"
 ```
 
 Response fields per token:
@@ -187,6 +196,8 @@ exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/token/info?add
 
 Returns: name, ticker, supply, decimals, price, pool info, holder count, bonding progress, and more.
 
+> **Tip:** Use `address=BTC` to get Bitcoin info as the native asset (returns hardcoded Bitcoin metadata with `is_native: true`).
+
 ---
 
 ## Step 3: Fund Wallet
@@ -204,9 +215,48 @@ After funding, verify with `GET /api/agent/wallet/balance`.
 
 Creates a new token with a bonding curve pool. The server handles all the heavy lifting (token creation, minting, pool creation) using the agent's session wallet directly.
 
+### Required Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Token name (1-50 chars) |
+| `ticker` | string | Token symbol (1-6 alphanumeric chars, auto-uppercased) |
+| `supply` | number | Total supply in display units |
+
+### Optional Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `decimals` | number | Token decimals, 0-9 (default: 6) |
+| `bio` | string | Token description (max 100 chars) |
+| `x` | string | X/Twitter username, NO @ prefix (max 15 chars) |
+| `website` | string | Website URL (max 200 chars) |
+| `telegram` | string | Telegram URL (max 200 chars) |
+| `imageUrl` | string | Token logo URL (https). Server fetches, resizes to 512x512, uploads to storage. Supports PNG, JPG, WebP, GIF. |
+| `initialBuyAmountSats` | number | Auto-buy sats after launch (1000-5000000 sats) |
+
+### Basic Launch (minimal)
+
 Write a JSON file (e.g. `launch-body.json`):
 ```json
 {"name":"MyToken","ticker":"MTK","supply":1000000,"decimals":6}
+```
+
+### Full Launch (with logo, links, and initial buy)
+
+```json
+{
+  "name": "MyToken",
+  "ticker": "MTK",
+  "supply": 1000000,
+  "decimals": 6,
+  "bio": "A cool community token on Spark Network",
+  "x": "mytokenhandle",
+  "website": "https://mytoken.com",
+  "telegram": "https://t.me/mytokengroup",
+  "imageUrl": "https://example.com/logo.png",
+  "initialBuyAmountSats": 5000
+}
 ```
 
 ```
@@ -228,7 +278,11 @@ Response:
     "announce_tx_id": "...",
     "mint_tx_id": "...",
     "trade_url": "https://utxo.fun/token/btkn1...",
-    "issuer_address": "spark1..."
+    "explorer_url": "https://...",
+    "issuer_address": "spark1...",
+    "issuer_public_key": "02...",
+    "initial_buy": { "accepted": true, "amountOut": "5000000" },
+    "metadata": { "bio": "...", "x": "...", "website": "...", "telegram": "...", "imageUrl": "...", "persisted": true }
   }
 }
 ```
@@ -242,7 +296,7 @@ Response:
 Before any buy or sell, always:
 
 1. **Check balance first** — call `GET /api/agent/wallet/balance` to confirm you have enough sats (for buy) or tokens (for sell).
-2. **Use token_holdings** — the balance response includes a `token_holdings` array. Each entry has `token_id` and `balance` (in base units). Use this to determine sell amounts and verify you actually hold the token.
+2. **Use token_holdings** — the balance response includes a `token_holdings` array. Each entry has `token_address` and `balance` (in base units). Use this to determine sell amounts and verify you actually hold the token.
 
 ---
 
@@ -266,11 +320,13 @@ Response:
   "result": {
     "type": "swap",
     "action": "buy",
-    "token": "btkn1...",
-    "amount_in": "1000",
-    "amount_out": "500000000",
-    "tx_id": "...",
-    "pool_id": "..."
+    "token_address": "btkn1...",
+    "amount_in": 1000,
+    "amount_out": 500000000,
+    "expected_output": 500000000,
+    "price_per_token": 0.000002,
+    "recipient_address": "spark1...",
+    "outbound_transfer_id": "..."
   }
 }
 ```
@@ -299,16 +355,22 @@ Response:
   "result": {
     "type": "swap",
     "action": "sell",
-    "token": "btkn1...",
-    "amount_in": "500000000",
-    "amount_out": "980",
-    "tx_id": "...",
-    "pool_id": "..."
+    "token_address": "btkn1...",
+    "amount_in": 500000000,
+    "amount_out": 980,
+    "expected_output": 980,
+    "price_per_token": 0.00000196,
+    "recipient_address": "spark1...",
+    "outbound_transfer_id": "..."
   }
 }
 ```
 
 The agent's session wallet swaps tokens for BTC sats directly on the AMM. Sats land in the wallet immediately.
+
+> **Alternative swap format:** Instead of `token` + `action`, you can use `input_token` and `output_token`:
+> - Buy: `{"input_token": "BTC", "output_token": "btkn1...", "amount": 1000}`
+> - Sell: `{"input_token": "btkn1...", "output_token": "BTC", "amount": 500000000}`
 
 ---
 
@@ -368,8 +430,10 @@ Response:
 ## Session Rules
 
 - **Idle timeout**: 15 minutes with no API calls → session expires
+- **Hard expiry**: 2 hours after creation, regardless of activity → session expires, reconnect required
+- **Max concurrent sessions**: Server allows up to 50 active sessions (LRU eviction removes oldest idle session when full)
 - **One session per agent**: Connecting again replaces the previous session
-- **Server restart**: All sessions are cleared — just reconnect
+- **Server restart**: All sessions are cleared (in-memory storage) — just reconnect
 - **401 = reconnect**: If any API returns 401, run wallet-connect.cjs and retry
 
 ## Error Handling
@@ -381,7 +445,19 @@ Response:
 | Insufficient balance | Transfer sats to the agent's spark_address, then check balance |
 | Swap fails | Tokens/sats remain in your wallet — check balance and retry |
 | Launch fails | Report the exact error to the user and retry |
-| Unknown token_id | Check balance → `token_holdings` to get the correct token_id before trading |
+| Unknown token_address | Check balance → `token_holdings` to get the correct token_address before trading |
+
+### Error Codes by Endpoint
+
+All error responses follow the format: `{ "success": false, "error": { "code": "...", "message": "..." } }`
+
+| Endpoint | Error Codes |
+|----------|-------------|
+| `/api/agent/wallet/balance` | `AUTH_ERROR`, `BALANCE_ERROR` |
+| `/api/agent/token/info` | `MISSING_PARAM`, `INVALID_ADDRESS`, `NOT_FOUND`, `INTERNAL_ERROR` |
+| `/api/agent/token/launch` | `AUTH_REQUIRED`, `INVALID_NAME`, `INVALID_TICKER`, `INVALID_SUPPLY`, `INVALID_DECIMALS`, `INVALID_BIO`, `INVALID_X`, `INVALID_WEBSITE`, `INVALID_TELEGRAM`, `INVALID_INITIAL_BUY`, `LAUNCH_FAILED` |
+| `/api/agent/swap` | `MISSING_PARAM`, `INVALID_ACTION`, `INVALID_AMOUNT`, `AUTH_REQUIRED`, `POOL_NOT_FOUND`, `AMOUNT_TOO_LOW`, `SIMULATION_FAILED`, `SWAP_REJECTED`, `INTERNAL_ERROR` |
+| `/api/agent/chat/message` | `AUTH_REQUIRED`, `MISSING_PARAM`, `MESSAGE_TOO_LONG`, `INTERNAL_ERROR` |
 
 ## Security Rules
 
