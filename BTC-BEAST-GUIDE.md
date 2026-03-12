@@ -6,6 +6,7 @@
 - [Autonomous Behaviors (Cron Jobs)](#autonomous-behaviors-cron-jobs)
 - [RAG Learning System](#rag-learning-system)
 - [Operator Commands (API)](#operator-commands-api)
+- [Twitter Cron Control](#twitter-cron-control)
 - [Trading Commands](#trading-commands)
 - [How to Call Commands from PowerShell](#how-to-call-commands-from-powershell)
 - [Autonomous Trading — Future](#autonomous-trading--future)
@@ -207,6 +208,88 @@ Get agent stats.
   "tweets_posted": 42,
   "mentions_handled": 128,
   "memories": 256
+}
+```
+
+#### POST /commands/start-tweeting
+
+Resume paused Twitter cron jobs. Specify which behaviors to start, or omit to start all.
+
+```json
+// Start all Twitter behaviors
+{}
+
+// Start only trending tweets
+{ "behaviors": ["trending"] }
+
+// Start specific behaviors
+{ "behaviors": ["trending", "mentions"] }
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "results": {
+    "trending": "started",
+    "mentions": "started",
+    "engagement": "already_running"
+  }
+}
+```
+
+#### POST /commands/stop-tweeting
+
+Pause Twitter cron jobs. The agent stays running but stops the specified behaviors.
+
+```json
+// Stop all Twitter behaviors
+{}
+
+// Stop only engagement
+{ "behaviors": ["engagement"] }
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "results": {
+    "trending": "stopped",
+    "mentions": "stopped",
+    "engagement": "stopped"
+  }
+}
+```
+
+#### GET /commands/cron-status
+
+Show which cron behaviors are active/paused, their schedules, and last run info.
+
+**Response:**
+```json
+{
+  "ok": true,
+  "behaviors": {
+    "trending": {
+      "schedule": "0 */4 * * *",
+      "running": true,
+      "lastRunAt": "2025-03-12T14:00:00.000Z",
+      "lastError": null
+    },
+    "mentions": {
+      "schedule": "*/5 * * * *",
+      "running": true,
+      "lastRunAt": "2025-03-12T14:05:00.000Z",
+      "lastError": null
+    },
+    "engagement": {
+      "schedule": "*/15 * * * *",
+      "running": false,
+      "lastRunAt": "2025-03-12T13:45:00.000Z",
+      "lastError": "RETTIWT_API_KEY expired"
+    }
+  }
 }
 ```
 
@@ -469,6 +552,23 @@ Beast POST "/commands/chat" '{"coinId":"btkn1abc...","message":"Beast is here �
 
 # Get token info
 Beast POST "/commands/token-info" '{"address":"btkn1abc..."}'
+
+# ── Twitter Cron Control ──
+
+# Check which crons are running/paused
+Beast GET "/commands/cron-status"
+
+# Stop all tweeting (trending + mentions + engagement)
+Beast POST "/commands/stop-tweeting" '{}'
+
+# Stop only engagement replies
+Beast POST "/commands/stop-tweeting" '{"behaviors":["engagement"]}'
+
+# Resume all tweeting
+Beast POST "/commands/start-tweeting" '{}'
+
+# Resume only trending tweets
+Beast POST "/commands/start-tweeting" '{"behaviors":["trending"]}'
 ```
 
 ### Dollar Conversion Helper

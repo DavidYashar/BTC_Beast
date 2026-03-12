@@ -6,6 +6,7 @@ import { postTweet } from '../twitter/client.js';
 import { recordTweet, remember } from '../memory/store.js';
 import { pool } from '../memory/db.js';
 import { initWallet, getSparkAddress } from '../utxo-api/wallet.js';
+import { cronTasks, type CronBehavior } from '../cron-registry.js';
 import {
   fetchBalance,
   executeSwap,
@@ -370,6 +371,121 @@ export function createCommandServer(): express.Express {
       res.json({ ok: true, token: info });
     } catch (err: any) {
       console.error('[commands] Token info error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Twitter Cron Control Commands ──
+
+  const ALL_BEHAVIORS: CronBehavior[] = ['trending', 'mentions', 'engagement'];
+
+  function parseBehaviors(body: { behaviors?: string[] }): CronBehavior[] {
+    if (!body.behaviors || body.behaviors.includes('all')) return ALL_BEHAVIORS;
+    return body.behaviors.filter((b): b is CronBehavior => ALL_BEHAVIORS.includes(b as CronBehavior));
+  }
+
+  /**
+   * POST /commands/start-tweeting
+   * Resume Twitter cron jobs.
+   * Body: { "behaviors": ["trending", "mentions", "engagement"] }
+   *   - Omit behaviors or pass ["all"] to start everything.
+   */
+  app.post('/commands/start-tweeting', async (req, res) => {
+    try {
+      const targets = parseBehaviors(req.body);
+      const results: Record<string, string> = {};
+
+      for (const name of targets) {
+        const info = cronTasks.get(name);
+        if (!info) {
+          results[name] = 'not_found';
+          continue;
+        }
+        if (info.running) {
+          results[name] = 'already_running';
+        } else {
+          info.task.start();
+          info.running = true;
+          results[name] = 'started';
+        }
+      }
+
+      console.log('[commands] start-tweeting:', results);
+      await pool.query(
+        `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+        ['start-tweeting', JSON.stringify(req.body), JSON.stringify(results)],
+      );
+
+      res.json({ ok: true, results });
+    } catch (err: any) {
+      console.error('[commands] start-tweeting error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /commands/stop-tweeting
+   * Pause Twitter cron jobs.
+   * Body: { "behaviors": ["trending", "mentions", "engagement"] }
+   *   - Omit behaviors or pass ["all"] to stop everything.
+   */
+  app.post('/commands/stop-tweeting', async (req, res) => {
+    try {
+      const targets = parseBehaviors(req.body);
+      const results: Record<string, string> = {};
+
+      for (const name of targets) {
+        const info = cronTasks.get(name);
+        if (!info) {
+          results[name] = 'not_found';
+          continue;
+        }
+        if (!info.running) {
+          results[name] = 'already_stopped';
+        } else {
+          info.task.stop();
+          info.running = false;
+          results[name] = 'stopped';
+        }
+      }
+
+      console.log('[commands] stop-tweeting:', results);
+      await pool.query(
+        `INSERT INTO operator_commands (command, payload, result) VALUES ($1, $2, $3)`,
+        ['stop-tweeting', JSON.stringify(req.body), JSON.stringify(results)],
+      );
+
+      res.json({ ok: true, results });
+    } catch (err: any) {
+      console.error('[commands] stop-tweeting error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /commands/cron-status
+   * Show which cron behaviors are active/paused, their schedules, and last run info.
+   */
+  app.get('/commands/cron-status', async (_req, res) => {
+    try {
+      const behaviors: Record<string, {
+        schedule: string;
+        running: boolean;
+        lastRunAt: string | null;
+        lastError: string | null;
+      }> = {};
+
+      for (const [name, info] of cronTasks) {
+        behaviors[name] = {
+          schedule: info.schedule,
+          running: info.running,
+          lastRunAt: info.lastRunAt?.toISOString() ?? null,
+          lastError: info.lastError,
+        };
+      }
+
+      res.json({ ok: true, behaviors });
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });

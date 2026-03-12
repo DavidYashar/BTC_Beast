@@ -6,6 +6,7 @@ import { postTrendingTweet } from './twitter/post-trending.js';
 import { handleMentions } from './twitter/mention-handler.js';
 import { engageWithMentions } from './twitter/engagement.js';
 import { initWallet, getSparkAddress } from './utxo-api/wallet.js';
+import { cronTasks, type CronBehavior, type CronTaskInfo } from './cron-registry.js';
 
 const PORT = parseInt(process.env.PORT || '10000', 10);
 
@@ -38,40 +39,41 @@ async function main() {
 
   // ── Scheduled Jobs ──
 
-  // Post trending tweet every 4 hours
-  cron.schedule(TRENDING_CRON, async () => {
-    try {
-      await postTrendingTweet();
-    } catch (err) {
-      console.error('[cron] Trending tweet error:', err);
-    }
-  });
+  // Helper to register a cron task in the registry
+  function registerCron(name: CronBehavior, schedule: string, handler: () => Promise<void>) {
+    const info: CronTaskInfo = {
+      task: cron.schedule(schedule, async () => {
+        info.lastRunAt = new Date();
+        try {
+          await handler();
+          info.lastError = null;
+        } catch (err: any) {
+          info.lastError = err?.message || String(err);
+          console.error(`[cron] ${name} error:`, err);
+        }
+      }),
+      schedule,
+      running: true,
+      lastRunAt: null,
+      lastError: null,
+    };
+    cronTasks.set(name, info);
+  }
 
-  // Check @mentions every 5 minutes
-  cron.schedule(MENTIONS_CRON, async () => {
-    try {
-      await handleMentions();
-    } catch (err) {
-      console.error('[cron] Mention handler error:', err);
-    }
-  });
-
-  // Engage with UTXO mentions every 15 minutes
-  cron.schedule(ENGAGEMENT_CRON, async () => {
-    try {
-      await engageWithMentions();
-    } catch (err) {
-      console.error('[cron] Engagement error:', err);
-    }
-  });
+  registerCron('trending', TRENDING_CRON, postTrendingTweet);
+  registerCron('mentions', MENTIONS_CRON, handleMentions);
+  registerCron('engagement', ENGAGEMENT_CRON, engageWithMentions);
 
   // Run initial tasks on startup (after a short delay)
   setTimeout(async () => {
     console.log('[startup] Running initial trending tweet...');
+    const info = cronTasks.get('trending');
     try {
       await postTrendingTweet();
-    } catch (err) {
+      if (info) { info.lastRunAt = new Date(); info.lastError = null; }
+    } catch (err: any) {
       console.error('[startup] Initial trending tweet failed:', err);
+      if (info) { info.lastRunAt = new Date(); info.lastError = err?.message || String(err); }
     }
   }, 10_000);
 
