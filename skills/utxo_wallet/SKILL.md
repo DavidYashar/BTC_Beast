@@ -58,7 +58,7 @@ Flags:
 | Method | Endpoint | Auth | Purpose |
 |--------|----------|------|---------|
 | GET | `/api/agent/wallet/balance` | Bearer | Check sats balance + token holdings |
-| GET | `/api/agent/trending` | No | Discover trending tokens (new pairs, migrating, migrated, gainers, losers) with optional sort |
+| GET | `/api/agent/trending` | No | Discover trending tokens (new pairs, migrating, migrated, gainers, losers, volume, marketcap) with optional sort |
 | GET | `/api/agent/token/info?address=X` | No | Get detailed info on a specific token |
 | POST | `/api/agent/token/launch` | Bearer | Create a new token (single-step) |
 | POST | `/api/agent/swap` | Bearer | Buy or sell tokens (single-step) |
@@ -135,20 +135,22 @@ Response:
 
 ### Trending Tokens
 
-See what is hot on UTXO Exchange. Returns tokens in five categories:
+See what is hot on UTXO Exchange. Returns tokens in seven categories:
 
 - **new_pairs** (New Pairs) — Recently launched tokens, still on the bonding curve
 - **migrating** (Migrating) — Tokens past 55% bonding progress, approaching migration to full AMM
 - **migrated** (Migrated) — Tokens that completed the bonding curve and trade on the full AMM
 - **gainers** — Tokens with the biggest price increase (real snapshot data, configurable timeframe)
 - **losers** — Tokens with the biggest price drop (real snapshot data, configurable timeframe)
+- **volume** — Tokens with the highest 24h trading volume (server-side sorted)
+- **marketcap** — Tokens with the highest market cap (supply × price, server-side sorted)
 
 ```
 exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=all&limit=10"
 ```
 
 Parameters (query string):
-- `category`: `new_pairs` | `migrating` | `migrated` | `gainers` | `losers` | `all` (default: `all`)
+- `category`: `new_pairs` | `migrating` | `migrated` | `gainers` | `losers` | `volume` | `marketcap` | `all` (default: `all`)
 - `limit`: 1 to 50 (default: 10)
 - `offset`: 0+ (default: 0, for pagination)
 - `sort`: `default` | `volume` | `tvl` | `gainers` | `losers` (default: `default`)
@@ -160,6 +162,8 @@ Default sort per category (when `sort=default`):
 - `migrated` — highest liquidity first (by TVL)
 - `gainers` — biggest price increase first (real price snapshot data)
 - `losers` — biggest price drop first (real price snapshot data)
+- `volume` — highest 24h trading volume first (server-side sorted)
+- `marketcap` — highest market cap first (supply × price, server-side sorted)
 
 Sort options:
 - `volume` — highest 24h trading volume first
@@ -173,6 +177,8 @@ exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?categ
 exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=gainers&timeframe=1h&limit=10"
 exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=losers&timeframe=6h&limit=10"
 exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=all&limit=5&offset=10"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=volume&limit=10"
+exec node skills/utxo_wallet/scripts/api-call.cjs GET "/api/agent/trending?category=marketcap&limit=10"
 ```
 
 Response fields per token:
@@ -185,6 +191,7 @@ Response fields per token:
 - `holders` — number of holders
 - `bonding_progress_pct` — bonding curve progress (100% = migrated)
 - `links.trade` — direct link to trade this token
+- `market_cap_sats` — market cap in satoshis (only included in `marketcap` category)
 
 ### Token Info
 
