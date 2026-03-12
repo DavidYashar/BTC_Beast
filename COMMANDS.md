@@ -28,6 +28,30 @@ function Beast($method, $path, $body = "") {
 }
 ```
 
+## Setup (Render Shell / Bash)
+
+Use this from Render Shell or any Linux/macOS terminal. From inside Render Shell, use `localhost:10000` (internal port). From outside, use the public URL.
+
+```bash
+BASE_URL="http://localhost:10000"   # Use https://utxo-beast.onrender.com from outside Render
+SECRET="your_OPERATOR_SECRET_value"
+
+beast() {
+  METHOD=$1; URL_PATH=$2; BODY="${3:-}"
+  SIG="sha256=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
+  if [ -n "$BODY" ]; then
+    curl -s -X "$METHOD" "$BASE_URL$URL_PATH" \
+      -H "X-Operator-Signature: $SIG" \
+      -H "Content-Type: application/json" \
+      -d "$BODY"
+  else
+    curl -s -X "$METHOD" "$BASE_URL$URL_PATH" \
+      -H "X-Operator-Signature: $SIG"
+  fi
+  echo ""
+}
+```
+
 ---
 
 ## Twitter Commands
@@ -42,6 +66,14 @@ Beast POST "/commands/tweet" '{"text":"gm bitcoin degens"}'
 
 # LLM generates from prompt
 Beast POST "/commands/tweet" '{"prompt":"Write about the top trending token on UTXO"}'
+```
+
+```bash
+# Exact text
+beast POST /commands/tweet '{"text":"gm bitcoin degens"}'
+
+# LLM generates from prompt
+beast POST /commands/tweet '{"prompt":"Write about the top trending token on UTXO"}'
 ```
 
 | Field | Type | Required | Description |
@@ -67,6 +99,11 @@ Beast POST "/commands/start-tweeting" '{}'
 Beast POST "/commands/start-tweeting" '{"behaviors":["trending"]}'
 ```
 
+```bash
+beast POST /commands/start-tweeting '{}'
+beast POST /commands/start-tweeting '{"behaviors":["trending"]}'
+```
+
 ### POST /commands/stop-tweeting
 
 ```powershell
@@ -77,6 +114,11 @@ Beast POST "/commands/stop-tweeting" '{}'
 Beast POST "/commands/stop-tweeting" '{"behaviors":["engagement"]}'
 ```
 
+```bash
+beast POST /commands/stop-tweeting '{}'
+beast POST /commands/stop-tweeting '{"behaviors":["engagement"]}'
+```
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `behaviors` | string[] | no | `["trending"]`, `["mentions"]`, `["engagement"]`, or omit for all |
@@ -85,6 +127,10 @@ Beast POST "/commands/stop-tweeting" '{"behaviors":["engagement"]}'
 
 ```powershell
 Beast GET "/commands/cron-status"
+```
+
+```bash
+beast GET /commands/cron-status
 ```
 
 Returns running/paused state, schedule, last run time, and last error for each behavior.
@@ -99,6 +145,10 @@ Inject knowledge into the agent's RAG memory. It will recall this in future twee
 
 ```powershell
 Beast POST "/commands/remember" '{"content":"UTXO.fun has zero platform fees","type":"manual"}'
+```
+
+```bash
+beast POST /commands/remember '{"content":"UTXO.fun has zero platform fees","type":"manual"}'
 ```
 
 | Field | Type | Required | Description |
@@ -116,6 +166,10 @@ Beast POST "/commands/remember" '{"content":"UTXO.fun has zero platform fees","t
 Beast GET "/commands/status"
 ```
 
+```bash
+beast GET /commands/status
+```
+
 Returns uptime, tweets posted count, mentions handled count, and total memories.
 
 ---
@@ -130,12 +184,20 @@ Provision a new wallet or check the current one. Send empty body.
 Beast POST "/commands/wallet" '{}'
 ```
 
+```bash
+beast POST /commands/wallet '{}'
+```
+
 Returns `status: "connected"` (existing wallet) or `status: "provisioned"` (new wallet).
 
 ### POST /commands/balance
 
 ```powershell
 Beast POST "/commands/balance" '{}'
+```
+
+```bash
+beast POST /commands/balance '{}'
 ```
 
 Returns BTC balance in sats and all token holdings.
@@ -154,6 +216,10 @@ Buy or sell any token on UTXO.fun. Uses the agent's wallet.
 Beast POST "/commands/swap" '{"action":"buy","token":"btkn1abc123...","amount":5000}'
 ```
 
+```bash
+beast POST /commands/swap '{"action":"buy","token":"btkn1abc123...","amount":5000}'
+```
+
 - `amount` = **sats to spend** (1 USDB ≈ 1,000 sats)
 - You receive tokens in return (amount depends on AMM price)
 
@@ -161,6 +227,10 @@ Beast POST "/commands/swap" '{"action":"buy","token":"btkn1abc123...","amount":5
 
 ```powershell
 Beast POST "/commands/swap" '{"action":"sell","token":"btkn1abc123...","amount":50000000}'
+```
+
+```bash
+beast POST /commands/swap '{"action":"sell","token":"btkn1abc123...","amount":50000000}'
 ```
 
 - `amount` = **token base units to sell** (check token's `decimals` for scaling)
@@ -181,6 +251,11 @@ Beast POST "/commands/swap" '{"action":"sell","token":"btkn1abc123...","amount":
 Beast POST "/commands/swap" '{"action":"buy","token":"btkn1abc...","amount":10000}'
 ```
 
+```bash
+# 1 USDB = 1,000 sats — Buy $10 worth:
+beast POST /commands/swap '{"action":"buy","token":"btkn1abc...","amount":10000}'
+```
+
 ---
 
 ## Token Launch (Create New Token)
@@ -191,6 +266,10 @@ Create a new token with a bonding curve on UTXO.fun.
 
 ```powershell
 Beast POST "/commands/launch" '{"name":"Beast Token","ticker":"BEAST","supply":1000000000,"decimals":6}'
+```
+
+```bash
+beast POST /commands/launch '{"name":"Beast Token","ticker":"BEAST","supply":1000000000,"decimals":6}'
 ```
 
 With optional initial buy + metadata:
@@ -206,6 +285,10 @@ Beast POST "/commands/launch" '{
   "x":"beast_btc15135",
   "website":"https://utxo.fun"
 }'
+```
+
+```bash
+beast POST /commands/launch '{"name":"Beast Token","ticker":"BEAST","supply":1000000000,"decimals":6,"initialBuyAmountSats":5000,"bio":"The official BTC Beast token","x":"beast_btc15135","website":"https://utxo.fun"}'
 ```
 
 | Field | Type | Required | Description |
@@ -235,6 +318,10 @@ Post a message on a token's chat page.
 Beast POST "/commands/chat" '{"coinId":"btkn1abc...","message":"Beast is bullish on this one"}'
 ```
 
+```bash
+beast POST /commands/chat '{"coinId":"btkn1abc...","message":"Beast is bullish on this one"}'
+```
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `coinId` | string | yes | Token address (`btkn1...`) |
@@ -251,6 +338,10 @@ Get price, TVL, volume, holders, and bonding progress for any token.
 
 ```powershell
 Beast POST "/commands/token-info" '{"address":"btkn1abc..."}'
+```
+
+```bash
+beast POST /commands/token-info '{"address":"btkn1abc..."}'
 ```
 
 | Field | Type | Required | Description |
