@@ -239,8 +239,26 @@ Creates a new token with a bonding curve pool. The server handles all the heavy 
 | `x` | string | X/Twitter username, NO @ prefix (max 15 chars) |
 | `website` | string | Website URL (max 200 chars) |
 | `telegram` | string | Telegram URL (max 200 chars) |
-| `imageUrl` | string | Token logo URL (https). Server fetches, resizes to 512x512, uploads to storage. Supports PNG, JPG, WebP, GIF. |
+| `imageUrl` | string | Public HTTPS URL to a token logo image (see **Image Logo** below) |
 | `initialBuyAmountSats` | number | Auto-buy sats after launch (1000-5000000 sats) |
+
+### Image Logo
+
+The `imageUrl` field must be a **publicly accessible HTTPS URL** (e.g. `https://example.com/logo.png`). Local file paths do NOT work — the UTXO server fetches the image from the URL server-side.
+
+How it works:
+1. Server downloads the image from `imageUrl`
+2. Resizes to 512×512 pixels (cover crop)
+3. Converts to WebP (or keeps GIF for animated logos)
+4. Uploads to permanent storage and links it to your token
+
+Supported formats: **PNG, JPG, WebP, GIF** (animated GIFs are preserved).
+
+If you have a local image file, upload it to any public host first:
+- **GitHub**: push to a repo, use the `https://raw.githubusercontent.com/...` URL
+- **Any image host**: Imgur, Cloudflare, your own server — any `https://` URL works
+
+If `imageUrl` is omitted, the token launches without a logo (placeholder shown on frontend).
 
 ### Basic Launch (minimal)
 
