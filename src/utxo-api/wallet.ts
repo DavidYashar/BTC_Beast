@@ -20,10 +20,13 @@ const BASE_URL = process.env.UTXO_API_BASE_URL?.replace(/\/api\/agent\/?$/, '') 
 
 // Session expires after 15 min idle; refresh if less than 5 min remain
 const SESSION_REFRESH_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+const WALLET_CONNECT_MAX_RETRIES = 3;
+const WALLET_CONNECT_RETRY_DELAY_MS = 2_000;
 
 let _sessionToken: string | null = null;
 let _sparkAddress: string | null = null;
 let _lastActivity: number = 0;
+let _refreshInProgress: Promise<void> | null = null;
 
 /**
  * Run wallet-connect.js with the given arguments.
@@ -96,24 +99,58 @@ export async function initWallet(): Promise<{ address: string; network: string }
 
 /**
  * Refresh the session by running wallet-connect.js (reconnect).
+ * Retries on 410 (handshake expired/used) with fresh handshake.
+ * Uses a mutex to prevent concurrent refresh attempts.
  */
 async function refreshSession(): Promise<void> {
-  console.log('[wallet] Refreshing session...');
-  // Use --force to skip pre-emptive disconnect of the old session.
-  // Without it, wallet-connect.cjs disconnects the existing session on the
-  // server before creating a new one — but Beast needs continuous sessions.
-  const output = await runWalletConnect(['--skip-disconnect']);
-  console.log('[wallet] Connect output:', output);
+  // Prevent concurrent refreshes — if one is already in progress, wait for it
+  if (_refreshInProgress) {
+    console.log('[wallet] Refresh already in progress, waiting...');
+    await _refreshInProgress;
+    return;
+  }
 
-  // Back up the new session file
-  await backupWalletFiles();
+  _refreshInProgress = (async () => {
+    let lastErr: Error | null = null;
+    for (let attempt = 1; attempt <= WALLET_CONNECT_MAX_RETRIES; attempt++) {
+      try {
+        console.log(`[wallet] Refreshing session (attempt ${attempt}/${WALLET_CONNECT_MAX_RETRIES})...`);
+        const output = await runWalletConnect(['--skip-disconnect']);
+        console.log('[wallet] Connect output:', output);
 
-  // Update in-memory cache
-  const session = readSessionFile();
-  if (session) {
-    _sessionToken = session.session_token;
-    _sparkAddress = session.spark_address;
-    _lastActivity = Date.now();
+        // Back up the new session file
+        await backupWalletFiles();
+
+        // Update in-memory cache
+        const session = readSessionFile();
+        if (session) {
+          _sessionToken = session.session_token;
+          _sparkAddress = session.spark_address;
+          _lastActivity = Date.now();
+        }
+        return; // Success
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        const msg = lastErr.message;
+        const isRetryable = /410|handshake.*expired|handshake.*used|already used/i.test(msg);
+
+        console.error(`[wallet] Connect attempt ${attempt} failed:`, msg);
+
+        if (!isRetryable || attempt === WALLET_CONNECT_MAX_RETRIES) {
+          throw lastErr;
+        }
+
+        console.log(`[wallet] Handshake expired (410) — retrying in ${WALLET_CONNECT_RETRY_DELAY_MS}ms with fresh nonce...`);
+        await new Promise((r) => setTimeout(r, WALLET_CONNECT_RETRY_DELAY_MS));
+      }
+    }
+    throw lastErr || new Error('[wallet] refreshSession failed after retries');
+  })();
+
+  try {
+    await _refreshInProgress;
+  } finally {
+    _refreshInProgress = null;
   }
 }
 
