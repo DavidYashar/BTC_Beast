@@ -1,6 +1,6 @@
 import * as cron from 'node-cron';
 
-export type CronBehavior = 'trending' | 'mentions' | 'engagement' | 'pruning';
+export type CronBehavior = 'trending' | 'mentions' | 'engagement' | 'pruning' | 'self-promo' | 's402' | 'wallet' | 'knowledge-refresh';
 
 export interface CronTaskInfo {
   task: cron.ScheduledTask;

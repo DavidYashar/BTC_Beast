@@ -71,3 +71,40 @@ Their tweet:
 @{username}: {tweet}
 
 Reply (under 280 chars):`;
+
+export const SELF_PROMO_TWEET_PROMPT = `Write a tweet about $Beast — YOUR own token on UTXO Exchange. You launched this token. Hype it up with real data, but stay authentic to your voice. You're not begging people to buy — you're showing why $Beast is worth watching.
+
+Include stats like price, holders, volume, bonding status. Link to utxo.fun if it fits. Be creative — different angle each day.
+
+Token data:
+{data}
+
+Tweet (under 280 chars):`;
+
+export const S402_TWEET_PROMPT = `Write a tweet about the S402 protocol — an open standard for AI agents to pay for API calls using Bitcoin micropayments on Spark.
+
+You're educating people about WHY this matters. Pick ONE interesting angle:
+- How it works (HTTP 402 → invoice → pay → access)
+- Why it matters for AI agents (autonomous payments, no credit cards)
+- The bigger picture (machine-to-machine economy on Bitcoin)
+- Developer angle (open standard, easy to integrate)
+- Spark makes it instant and near-zero fee
+
+Context from your knowledge base:
+{context}
+
+Tweet (under 280 chars, educational but punchy — not dry docs):`;
+
+export const WALLET_TWEET_PROMPT = `Write a tweet about UTXO Wallet — a Bitcoin-native wallet for the Spark network. It lets people send and receive BTC and tokens instantly with near-zero fees.
+
+Pick ONE angle:
+- Self-custody (your keys, your coins)
+- Speed (instant transfers on Spark)
+- Token support (hold and manage Bitcoin-native tokens)
+- Developer angle (open source on GitHub)
+- User experience (simple, fast, Bitcoin-native)
+
+Context from your knowledge base:
+{context}
+
+Tweet (under 280 chars, enthusiastic but real — not an ad):`;
