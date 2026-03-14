@@ -32,21 +32,19 @@ function Beast($method, $path, $body = "") {
 
 Use this from Render Shell or any Linux/macOS terminal. From inside Render Shell, use `localhost:10000` (internal port). From outside, use the public URL.
 
+> **Important:** Multi-line `curl` with backslash continuations (`\`) can break when pasted into Render Shell. The function below uses single-line `curl` commands to avoid this.
+
 ```bash
 BASE_URL="http://localhost:10000"   # Use https://utxo-beast.onrender.com from outside Render
-SECRET="your_OPERATOR_SECRET_value"
+SECRET="$OPERATOR_SECRET"           # Auto-reads from env var on Render
 
 beast() {
-  METHOD=$1; URL_PATH=$2; BODY="${3:-}"
-  SIG="sha256=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
+  local METHOD=$1 URL_PATH=$2 BODY="${3:-}"
+  local SIG="sha256=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')"
   if [ -n "$BODY" ]; then
-    curl -s -X "$METHOD" "$BASE_URL$URL_PATH" \
-      -H "X-Operator-Signature: $SIG" \
-      -H "Content-Type: application/json" \
-      -d "$BODY"
+    curl -s -X "$METHOD" "$BASE_URL$URL_PATH" -H "X-Operator-Signature: $SIG" -H "Content-Type: application/json" -d "$BODY"
   else
-    curl -s -X "$METHOD" "$BASE_URL$URL_PATH" \
-      -H "X-Operator-Signature: $SIG"
+    curl -s -X "$METHOD" "$BASE_URL$URL_PATH" -H "X-Operator-Signature: $SIG"
   fi
   echo ""
 }
@@ -364,5 +362,75 @@ These are the UTXO.fun platform APIs that BTC Beast calls internally. You don't 
 | `POST /api/agent/swap` | `/commands/swap` | Bearer token |
 | `POST /api/agent/token/launch` | `/commands/launch` | Bearer token |
 | `POST /api/agent/chat/message` | `/commands/chat` | Bearer token |
+| `GET /api/agent/fees` | Fee checking (coming soon) | Bearer token |
+| `POST /api/agent/fees/claim` | Fee claiming (coming soon) | Bearer token |
 
 The agent's wallet session (Bearer token) is managed automatically — it auto-provisions on first boot and auto-refreshes before expiry.
+
+---
+
+## Database Management (Render Shell)
+
+BTC Beast stores wallet files in PostgreSQL (not the filesystem). Use these commands from the Render Shell to manage the database directly.
+
+### Connect to Database
+
+```bash
+psql $DATABASE_URL
+```
+
+### List All Tables
+
+```bash
+psql $DATABASE_URL -c "\dt"
+```
+
+Tables: `agent_state`, `agent_wallet_files`, `knowledge`, `memories`, `mentions_handled`, `operator_commands`, `token_snapshots`, `tweets_posted`
+
+### Inspect Table Schema
+
+```bash
+psql $DATABASE_URL -c "\d agent_wallet_files"
+```
+
+### View Wallet Files
+
+```bash
+psql $DATABASE_URL -c "SELECT filename, length(content) as size, updated_at FROM agent_wallet_files;"
+```
+
+### Back Up Wallet
+
+```bash
+psql $DATABASE_URL -c "COPY agent_wallet_files TO STDOUT;" > /tmp/wallet_backup.txt
+```
+
+### Reset Wallet (provision fresh)
+
+Deletes the current wallet so the next `/commands/wallet` call creates a new one with a new identity key and spark address.
+
+```bash
+# Back up first
+psql $DATABASE_URL -c "COPY agent_wallet_files TO STDOUT;" > /tmp/wallet_backup.txt
+
+# Delete wallet + session records
+psql $DATABASE_URL -c "DELETE FROM agent_wallet_files;"
+
+# Provision fresh wallet
+beast POST /commands/wallet '{}'
+```
+
+### Restore Wallet from Backup
+
+```bash
+# Clear current
+psql $DATABASE_URL -c "DELETE FROM agent_wallet_files;"
+
+# Restore
+psql $DATABASE_URL -c "COPY agent_wallet_files FROM STDIN;" < /tmp/wallet_backup.txt
+
+# Reconnect
+beast POST /commands/wallet '{}'
+```
+
+> **Warning:** Deleting the wallet is irreversible if you don't have a backup. The wallet's mnemonic and encryption key are stored only in this table.
