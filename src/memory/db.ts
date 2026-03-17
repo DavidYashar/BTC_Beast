@@ -19,7 +19,9 @@ export function getPool(): pg.Pool {
       connectionString: process.env.DATABASE_URL,
       ssl,
       max: 10,
-      idleTimeoutMillis: 30000,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+      statement_timeout: 30_000,
     });
   }
   return _pool;

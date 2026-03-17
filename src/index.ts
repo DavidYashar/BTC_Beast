@@ -64,6 +64,8 @@ async function main() {
   // ── Scheduled Jobs ──
 
   // Helper to register a cron task in the registry
+  const HANDLER_TIMEOUT_MS = 2 * 60_000; // 2 min max per cron handler
+
   function registerCron(name: CronBehavior, schedule: string, handler: () => Promise<void>) {
     let executing = false;
     const startPaused = !AUTO_TWEET;
@@ -76,7 +78,12 @@ async function main() {
         executing = true;
         info.lastRunAt = new Date();
         try {
-          await handler();
+          await Promise.race([
+            handler(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`${name} handler timed out after ${HANDLER_TIMEOUT_MS / 1000}s`)), HANDLER_TIMEOUT_MS),
+            ),
+          ]);
           info.lastError = null;
         } catch (err: any) {
           info.lastError = err?.message || String(err);

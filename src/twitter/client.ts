@@ -32,11 +32,16 @@ async function rateLimit(): Promise<void> {
   // If a previous call hit 429, wait until the reset window before proceeding
   if (rateLimitResetAt > 0) {
     const waitMs = rateLimitResetAt * 1000 - Date.now();
-    if (waitMs > 0 && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
+    if (waitMs <= 0) {
+      // Reset time has passed — clear the gate
+      rateLimitResetAt = 0;
+    } else if (waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
       console.log(`[twitter] Rate-limited — waiting ${Math.ceil(waitMs / 1000)}s until reset...`);
       await new Promise((r) => setTimeout(r, waitMs + 1_000)); // +1s buffer
       rateLimitResetAt = 0;
-    } else if (waitMs > MAX_RATE_LIMIT_WAIT_MS) {
+    } else {
+      // Too long to wait — clear the gate and let the caller fail fast
+      rateLimitResetAt = 0;
       throw new Error(`Rate limit resets in ${Math.ceil(waitMs / 60_000)}min — too long to wait`);
     }
   }
