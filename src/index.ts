@@ -12,6 +12,7 @@ import { engageWithMentions } from './twitter/engagement.js';
 import { pruneMemories } from './memory/store.js';
 import { initWallet, getSparkAddress } from './utxo-api/wallet.js';
 import { fetchGitHubKnowledge } from './knowledge/github-fetcher.js';
+import { postContentTweet } from './content/scheduler.js';
 import { cronTasks, type CronBehavior, type CronTaskInfo } from './cron-registry.js';
 
 const PORT = parseInt(process.env.PORT || '10000', 10);
@@ -23,6 +24,7 @@ const ENGAGEMENT_CRON = process.env.ENGAGEMENT_CRON || '*/15 * * * *'; // every 
 const SELF_PROMO_CRON = process.env.SELF_PROMO_CRON || '0 14 * * *'; // daily at 14:00 UTC
 const S402_CRON = process.env.S402_CRON || '0 18 * * *'; // daily at 18:00 UTC
 const WALLET_CRON = process.env.WALLET_CRON || '0 22 * * *'; // daily at 22:00 UTC
+const CONTENT_CRON = process.env.CONTENT_CRON || '0 */3 * * *'; // every 3 hours
 
 // When false/unset, crons start paused — use POST /commands/start-tweeting to enable
 const AUTO_TWEET = process.env.AUTO_TWEET === 'true';
@@ -101,6 +103,7 @@ async function main() {
   registerCron('self-promo', SELF_PROMO_CRON, postSelfPromoTweet);
   registerCron('s402', S402_CRON, postS402Tweet);
   registerCron('wallet', WALLET_CRON, postWalletTweet);
+  registerCron('content', CONTENT_CRON, postContentTweet);
 
   // Daily memory pruning at 3:00 AM UTC
   registerCron('pruning', '0 3 * * *', async () => {
@@ -142,6 +145,7 @@ async function main() {
   console.log(`  Self-promo ($Beast): ${SELF_PROMO_CRON}`);
   console.log(`  S402 protocol: ${S402_CRON}`);
   console.log(`  UTXO Wallet: ${WALLET_CRON}`);
+  console.log(`  Content engine: ${CONTENT_CRON}`);
   console.log(`  Mention checks: ${MENTIONS_CRON}`);
   console.log(`  Engagement: ${ENGAGEMENT_CRON}`);
   console.log(`  Auto-tweet: ${AUTO_TWEET ? 'ON' : 'OFF (paused)'}`);

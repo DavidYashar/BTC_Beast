@@ -3,6 +3,7 @@ import { SYSTEM_PROMPT, TRENDING_TWEET_PROMPT } from '../personality/prompts.js'
 import { fetchTrending, formatTrendingForPrompt } from '../utxo-api/client.js';
 import { postTweet } from './client.js';
 import { recall, recordTweet, isTweetTooSimilar, recordTokenSnapshots } from '../memory/store.js';
+import { filterLLMOutput } from './safety.js';
 
 const MAX_DEDUP_RETRIES = 2;
 
@@ -52,6 +53,14 @@ export async function postTrendingTweet(): Promise<void> {
       ],
       { temperature: 0.9 + (attempt * 0.05), maxTokens: 280 },
     );
+
+    const safe = filterLLMOutput(tweet);
+    if (!safe) {
+      console.warn('[trending] Safety filter blocked tweet, retrying...');
+      attempt++;
+      continue;
+    }
+    tweet = safe;
 
     if (!tweet || tweet.length > 280) {
       console.log(`[trending] Tweet invalid (length=${tweet?.length}), skipping.`);

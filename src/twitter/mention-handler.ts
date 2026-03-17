@@ -2,6 +2,7 @@ import { chat } from '../llm/client.js';
 import { SYSTEM_PROMPT, MENTION_REPLY_PROMPT } from '../personality/prompts.js';
 import { fetchMentions, replyToTweet, getUsernameById } from './client.js';
 import { recall, remember, isMentionHandled, markMentionHandled, getState, setState } from '../memory/store.js';
+import { sanitizeMentionInput, filterLLMOutput } from './safety.js';
 
 /**
  * Poll direct @mentions, generate RAG-enhanced replies.
@@ -33,10 +34,11 @@ export async function handleMentions(): Promise<void> {
       const memories = await recall(mention.text, 5);
       const context = memories.map(m => m.text).join('\n---\n');
 
+      const safeTweet = sanitizeMentionInput(mention.text);
       const prompt = MENTION_REPLY_PROMPT
         .replace('{context}', context || 'No specific context found.')
         .replace('{username}', username)
-        .replace('{tweet}', mention.text);
+        .replace('{tweet}', safeTweet);
 
       const reply = await chat(
         [
@@ -52,12 +54,19 @@ export async function handleMentions(): Promise<void> {
         continue;
       }
 
-      console.log(`[mentions] Replying to @${username}: ${reply}`);
-      const replyId = await replyToTweet(reply, mention.id);
+      const safeReply = filterLLMOutput(reply);
+      if (!safeReply) {
+        console.warn(`[mentions] Reply to ${mention.id} blocked by safety filter.`);
+        await markMentionHandled(mention.id, null, { skipped: true, reason: 'safety_filter' });
+        continue;
+      }
+
+      console.log(`[mentions] Replying to @${username}: ${safeReply}`);
+      const replyId = await replyToTweet(safeReply, mention.id);
 
       await markMentionHandled(mention.id, replyId, { username });
       await remember(
-        `Replied to @${username} who said: "${mention.text.slice(0, 100)}". My reply: "${reply}"`,
+        `Replied to @${username} who said: "${safeTweet.slice(0, 100)}". My reply: "${safeReply}"`,
         'mention_reply',
       );
     } catch (err) {

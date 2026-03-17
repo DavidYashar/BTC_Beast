@@ -3,6 +3,7 @@ import { SYSTEM_PROMPT, SELF_PROMO_TWEET_PROMPT } from '../personality/prompts.j
 import { fetchTokenInfo, formatTokenInfoForPrompt } from '../utxo-api/client.js';
 import { postTweet } from './client.js';
 import { recall, recordTweet, isTweetTooSimilar } from '../memory/store.js';
+import { filterLLMOutput } from './safety.js';
 
 const MAX_DEDUP_RETRIES = 2;
 
@@ -52,6 +53,14 @@ export async function postSelfPromoTweet(): Promise<void> {
       ],
       { temperature: 0.9 + (attempt * 0.05), maxTokens: 280 },
     );
+
+    const safe = filterLLMOutput(tweet);
+    if (!safe) {
+      console.warn('[self-promo] Safety filter blocked tweet, retrying...');
+      attempt++;
+      continue;
+    }
+    tweet = safe;
 
     if (!tweet || tweet.length > 280) {
       console.log(`[self-promo] Tweet invalid (length=${tweet?.length}), skipping.`);

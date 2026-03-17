@@ -7,6 +7,7 @@ import { recordTweet, remember } from '../memory/store.js';
 import { pool } from '../memory/db.js';
 import { initWallet, getSparkAddress } from '../utxo-api/wallet.js';
 import { cronTasks, type CronBehavior } from '../cron-registry.js';
+import { filterLLMOutput } from '../twitter/safety.js';
 import {
   fetchBalance,
   executeSwap,
@@ -17,19 +18,22 @@ import {
   formatTokenInfoForPrompt,
 } from '../utxo-api/client.js';
 
-const OPERATOR_SECRET = process.env.OPERATOR_SECRET || '';
+const OPERATOR_SECRET = process.env.OPERATOR_SECRET;
 
 if (!OPERATOR_SECRET) {
-  console.warn('\u26a0\ufe0f  WARNING: OPERATOR_SECRET is not set. All operator commands will be rejected.');
+  throw new Error('FATAL: OPERATOR_SECRET env var must be set. Refusing to start without webhook authentication.');
 }
 
 /** Sanitize error messages to avoid leaking internal details. */
 function safeErrorMessage(err: any): string {
   const msg = err?.message ?? String(err);
-  // Strip connection strings, file paths, and stack traces
+  // Strip connection strings, file paths, stack traces, and any sensitive patterns
   if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT/.test(msg)) return 'Service temporarily unavailable';
-  if (/password|connectionString|DATABASE_URL/i.test(msg)) return 'Internal server error';
-  return msg;
+  if (/password|connectionString|DATABASE_URL|SECRET|KEY|token/i.test(msg)) return 'Internal server error';
+  if (/\/(\w+\/)+\w+\.\w+/.test(msg)) return 'Internal server error'; // file paths
+  if (/at\s+\w+\s+\(/.test(msg)) return 'Internal server error'; // stack frames
+  // For anything else, return a generic message to avoid info leaks
+  return 'Service error';
 }
 
 /**
@@ -96,6 +100,16 @@ export function createCommandServer(): express.Express {
       if (tweetText.length > 280) {
         res.status(400).json({ error: 'Tweet exceeds 280 chars', length: tweetText.length });
         return;
+      }
+
+      // Safety filter — only for LLM-generated tweets (prompt path)
+      if (prompt) {
+        const safe = filterLLMOutput(tweetText);
+        if (!safe) {
+          res.status(400).json({ error: 'Tweet blocked by safety filter' });
+          return;
+        }
+        tweetText = safe;
       }
 
       const tweetId = await postTweet(tweetText);
@@ -390,7 +404,7 @@ export function createCommandServer(): express.Express {
 
   // ── Twitter Cron Control Commands ──
 
-  const ALL_BEHAVIORS: CronBehavior[] = ['trending', 'mentions', 'engagement'];
+  const ALL_BEHAVIORS: CronBehavior[] = ['trending', 'mentions', 'engagement', 'self-promo', 's402', 'wallet', 'content', 'pruning', 'knowledge-refresh'];
 
   function parseBehaviors(body: { behaviors?: string[] }): CronBehavior[] {
     if (!body.behaviors || body.behaviors.includes('all')) return ALL_BEHAVIORS;

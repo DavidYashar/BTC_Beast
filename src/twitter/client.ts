@@ -1,6 +1,8 @@
-import { Rettiwt, TweetFilter } from 'rettiwt-api';
+import { TwitterApi } from 'twitter-api-v2';
 
-let _client: Rettiwt | null = null;
+// ── Client singleton ──
+
+let _client: TwitterApi | null = null;
 
 // ── Rate limiting & timeout helpers ──
 
@@ -9,6 +11,9 @@ const MIN_API_DELAY_MS = 2_000; // minimum gap between Twitter API calls
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 3_000;
 let lastApiCallAt = 0;
+
+// Cache our own user ID (needed for mentions endpoint)
+let _myUserId: string | null = null;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -30,26 +35,53 @@ async function rateLimit(): Promise<void> {
 
 function isAuthError(err: unknown): boolean {
   const msg = String(err);
-  return /401|403|NOT_FOUND|Authentication|Unauthorized|cookie|auth/i.test(msg);
+  return /401|403|Unauthorized|Forbidden|authentication|auth/i.test(msg);
 }
 
-function getClient(): Rettiwt {
+function getClient(): TwitterApi {
   if (!_client) {
-    const apiKey = process.env.RETTIWT_API_KEY;
-    if (!apiKey) {
-      throw new Error('RETTIWT_API_KEY is required (base64-encoded Twitter cookies)');
+    const apiKey = process.env.TWITTER_API_KEY;
+    const apiSecret = process.env.TWITTER_API_SECRET;
+    const accessToken = process.env.TWITTER_ACCESS_TOKEN;
+    const accessSecret = process.env.TWITTER_ACCESS_TOKEN_SECRET;
+
+    if (!apiKey || !apiSecret || !accessToken || !accessSecret) {
+      throw new Error(
+        'Twitter API v2 credentials required: TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET',
+      );
     }
-    _client = new Rettiwt({ apiKey });
-    console.log('[twitter] Rettiwt client initialized.');
+
+    _client = new TwitterApi({
+      appKey: apiKey,
+      appSecret: apiSecret,
+      accessToken,
+      accessSecret,
+    });
+
+    console.log('[twitter] Twitter API v2 client initialized (OAuth 1.0a User Context).');
   }
   return _client;
 }
 
 /**
- * Force re-create the Rettiwt client (picks up fresh env var).
+ * Get our own user ID (cached after first call).
+ */
+async function getMyUserId(): Promise<string> {
+  if (_myUserId) return _myUserId;
+  const client = getClient();
+  await rateLimit();
+  const me = await withTimeout(client.v2.me(), TWITTER_TIMEOUT_MS, 'getMyUserId');
+  _myUserId = me.data.id;
+  console.log(`[twitter] Resolved own user ID: ${_myUserId}`);
+  return _myUserId;
+}
+
+/**
+ * Force re-create the Twitter client (picks up fresh env vars).
  */
 export function resetClient(): void {
   _client = null;
+  _myUserId = null;
   console.log('[twitter] Client reset — will reinitialize on next call.');
 }
 
@@ -68,7 +100,6 @@ async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
 
       if (isLast) break;
 
-      // On auth-related failures, reset client so next attempt gets fresh cookies
       if (isAuthError(err)) {
         resetClient();
       }
@@ -89,14 +120,11 @@ export async function postTweet(text: string): Promise<string> {
   return withRetry('postTweet', async () => {
     const client = getClient();
     await rateLimit();
-    const result = await withTimeout(client.tweet.post({ text }), TWITTER_TIMEOUT_MS, 'postTweet');
-    console.log(`[twitter] postTweet raw result:`, typeof result, result);
-    if (!result) {
-      // Reset client — the cookie may be stale
-      resetClient();
-      throw new Error('Failed to post tweet — no ID returned (possible auth issue)');
+    const result = await withTimeout(client.v2.tweet(text), TWITTER_TIMEOUT_MS, 'postTweet');
+    if (!result?.data?.id) {
+      throw new Error('Failed to post tweet — no ID returned');
     }
-    const id = String(result);
+    const id = result.data.id;
     console.log(`[twitter] Tweet posted: ${id}`);
     return id;
   });
@@ -110,13 +138,15 @@ export async function replyToTweet(text: string, inReplyToId: string): Promise<s
   return withRetry('replyToTweet', async () => {
     const client = getClient();
     await rateLimit();
-    const result = await withTimeout(client.tweet.post({ text, replyTo: inReplyToId }), TWITTER_TIMEOUT_MS, 'replyToTweet');
-    console.log(`[twitter] replyToTweet raw result:`, typeof result, result);
-    if (!result) {
-      resetClient();
-      throw new Error('Failed to post reply — no ID returned (possible auth issue)');
+    const result = await withTimeout(
+      client.v2.reply(text, inReplyToId),
+      TWITTER_TIMEOUT_MS,
+      'replyToTweet',
+    );
+    if (!result?.data?.id) {
+      throw new Error('Failed to post reply — no ID returned');
     }
-    const id = String(result);
+    const id = result.data.id;
     console.log(`[twitter] Reply posted: ${id}`);
     return id;
   });
@@ -132,26 +162,41 @@ export interface Mention {
 
 /**
  * Fetch recent mentions of the bot's account.
- * Returns empty array on auth/search errors to avoid crashing the cron.
+ * Uses GET /2/users/:id/mentions with author expansion.
+ * Returns empty array on errors to avoid crashing the cron.
  */
 export async function fetchMentions(sinceId?: string): Promise<Mention[]> {
-  const username = process.env.TWITTER_USERNAME;
-  if (!username) return [];
-
   try {
     const client = getClient();
-    const filter: TweetFilter = { mentions: [username] } as TweetFilter;
-    if (sinceId) (filter as any).sinceId = sinceId;
+    const myId = await getMyUserId();
 
     await rateLimit();
-    const results = await withTimeout(client.tweet.search(filter, 20), TWITTER_TIMEOUT_MS, 'fetchMentions');
+    const result = await withTimeout(
+      client.v2.userMentionTimeline(myId, {
+        max_results: 20,
+        ...(sinceId ? { since_id: sinceId } : {}),
+        'tweet.fields': ['created_at', 'author_id'],
+        expansions: ['author_id'],
+        'user.fields': ['username'],
+      }),
+      TWITTER_TIMEOUT_MS,
+      'fetchMentions',
+    );
 
-    return results.list.map((tweet) => ({
+    // Build author_id → username map from expansions
+    const userMap = new Map<string, string>();
+    if (result.includes?.users) {
+      for (const user of result.includes.users) {
+        userMap.set(user.id, user.username);
+      }
+    }
+
+    return (result.data?.data ?? []).map((tweet) => ({
       id: tweet.id,
-      text: tweet.fullText,
-      authorId: tweet.tweetBy.id,
-      username: tweet.tweetBy.userName,
-      createdAt: tweet.createdAt,
+      text: tweet.text,
+      authorId: tweet.author_id ?? '',
+      username: tweet.author_id ? userMap.get(tweet.author_id) : undefined,
+      createdAt: tweet.created_at,
     }));
   } catch (err) {
     console.error('[twitter] fetchMentions failed:', err);
@@ -165,47 +210,56 @@ export async function fetchMentions(sinceId?: string): Promise<Mention[]> {
 
 /**
  * Search recent tweets mentioning "utxo.fun" (not direct @mentions).
- * Returns empty array on auth/search errors to avoid crashing the cron.
+ * Uses GET /2/tweets/search/recent with author expansion.
+ * Returns empty array on errors to avoid crashing the cron.
  */
 export async function searchUtxoMentions(sinceId?: string): Promise<Mention[]> {
   const myUsername = process.env.TWITTER_USERNAME || '';
   const seenIds = new Set<string>();
   const allMentions: Mention[] = [];
 
-  // Search for multiple terms to catch broader engagement opportunities
-  const searchTerms = ['utxo.fun', '"UTXO Exchange"'];
+  // Combine search terms into one query to conserve the 10K/month search quota
+  const query = `(utxo.fun OR "UTXO Exchange")${myUsername ? ` -from:${myUsername}` : ''}`;
 
-  for (const term of searchTerms) {
-    try {
-      const client = getClient();
-      const filter: TweetFilter = {
-        includeWords: [term],
-        excludeWords: [],
-      } as TweetFilter;
-      if (sinceId) (filter as any).sinceId = sinceId;
+  try {
+    const client = getClient();
+    await rateLimit();
+    const result = await withTimeout(
+      client.v2.search(query, {
+        max_results: 20,
+        ...(sinceId ? { since_id: sinceId } : {}),
+        'tweet.fields': ['created_at', 'author_id'],
+        expansions: ['author_id'],
+        'user.fields': ['username'],
+      }),
+      TWITTER_TIMEOUT_MS,
+      'searchUtxoMentions',
+    );
 
-      await rateLimit();
-      const results = await withTimeout(client.tweet.search(filter, 20), TWITTER_TIMEOUT_MS, 'searchUtxoMentions');
-
-      for (const tweet of results.list) {
-        if (tweet.tweetBy.userName.toLowerCase() === myUsername.toLowerCase()) continue;
-        if (seenIds.has(tweet.id)) continue;
-        seenIds.add(tweet.id);
-        allMentions.push({
-          id: tweet.id,
-          text: tweet.fullText,
-          authorId: tweet.tweetBy.id,
-          username: tweet.tweetBy.userName,
-          createdAt: tweet.createdAt,
-        });
+    // Build author_id → username map from expansions
+    const userMap = new Map<string, string>();
+    if (result.includes?.users) {
+      for (const user of result.includes.users) {
+        userMap.set(user.id, user.username);
       }
-    } catch (err) {
-      console.error(`[twitter] searchUtxoMentions("${term}") failed:`, err);
-      if (isAuthError(err)) {
-        resetClient();
-        console.warn('[twitter] searchUtxoMentions: auth error — client reset, skipping term.');
-      }
-      // Continue to next search term
+    }
+
+    for (const tweet of result.data?.data ?? []) {
+      if (seenIds.has(tweet.id)) continue;
+      seenIds.add(tweet.id);
+      allMentions.push({
+        id: tweet.id,
+        text: tweet.text,
+        authorId: tweet.author_id ?? '',
+        username: tweet.author_id ? userMap.get(tweet.author_id) : undefined,
+        createdAt: tweet.created_at,
+      });
+    }
+  } catch (err) {
+    console.error(`[twitter] searchUtxoMentions failed:`, err);
+    if (isAuthError(err)) {
+      resetClient();
+      console.warn('[twitter] searchUtxoMentions: auth error — client reset.');
     }
   }
 
@@ -214,11 +268,24 @@ export async function searchUtxoMentions(sinceId?: string): Promise<Mention[]> {
 
 /**
  * Look up a username by user ID.
+ * Now works properly with Twitter API v2.
  */
 export async function getUsernameById(userId: string): Promise<string> {
-  // rettiwt-api's user.details() takes username, not ID.
-  // Mentions should always include username from search results.
-  // If we only have the ID, log a warning and return a safe fallback.
-  console.warn(`[twitter] getUsernameById called with raw ID: ${userId} — mention may be missing username field`);
-  return `user_${userId}`;
+  try {
+    const client = getClient();
+    await rateLimit();
+    const result = await withTimeout(
+      client.v2.user(userId, { 'user.fields': ['username'] }),
+      TWITTER_TIMEOUT_MS,
+      'getUsernameById',
+    );
+    if (result.data?.username) {
+      return result.data.username;
+    }
+    console.warn(`[twitter] getUsernameById: no username in response for ID ${userId}`);
+    return `user_${userId}`;
+  } catch (err) {
+    console.error(`[twitter] getUsernameById failed for ${userId}:`, err);
+    return `user_${userId}`;
+  }
 }

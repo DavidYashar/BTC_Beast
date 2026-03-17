@@ -2,6 +2,7 @@ import { chat } from '../llm/client.js';
 import { SYSTEM_PROMPT, S402_TWEET_PROMPT } from '../personality/prompts.js';
 import { postTweet } from './client.js';
 import { recall, recordTweet, isTweetTooSimilar } from '../memory/store.js';
+import { filterLLMOutput } from './safety.js';
 
 const MAX_DEDUP_RETRIES = 2;
 
@@ -45,6 +46,14 @@ export async function postS402Tweet(): Promise<void> {
       ],
       { temperature: 0.9 + (attempt * 0.05), maxTokens: 280 },
     );
+
+    const safe = filterLLMOutput(tweet);
+    if (!safe) {
+      console.warn('[s402] Safety filter blocked tweet, retrying...');
+      attempt++;
+      continue;
+    }
+    tweet = safe;
 
     if (!tweet || tweet.length > 280) {
       console.log(`[s402] Tweet invalid (length=${tweet?.length}), skipping.`);
