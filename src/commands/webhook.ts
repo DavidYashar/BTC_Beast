@@ -7,6 +7,7 @@ import { recordTweet, remember } from '../memory/store.js';
 import { pool } from '../memory/db.js';
 import { initWallet, getSparkAddress } from '../utxo-api/wallet.js';
 import { cronTasks, type CronBehavior } from '../cron-registry.js';
+import { currentRunning, pendingJobs } from '../cron-queue.js';
 import { filterLLMOutput } from '../twitter/safety.js';
 import {
   fetchBalance,
@@ -511,7 +512,7 @@ export function createCommandServer(): express.Express {
         };
       }
 
-      res.json({ ok: true, behaviors });
+      res.json({ ok: true, behaviors, queue: { executing: currentRunning(), pending: pendingJobs() } });
     } catch (err: any) {
       res.status(500).json({ error: safeErrorMessage(err) });
     }

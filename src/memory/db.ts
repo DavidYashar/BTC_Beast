@@ -18,10 +18,17 @@ export function getPool(): pg.Pool {
     _pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl,
-      max: 10,
+      max: 5,                        // serial cron queue means fewer concurrent queries
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
       statement_timeout: 30_000,
+      keepAlive: true,               // prevent Render proxy from killing idle sockets
+      keepAliveInitialDelayMillis: 10_000,
+    });
+
+    // Log pool-level errors (e.g. idle client disconnect) so they don't crash the process
+    _pool.on('error', (err) => {
+      console.error('[pg-pool] Unexpected idle client error:', err.message);
     });
   }
   return _pool;

@@ -14,6 +14,7 @@ import { initWallet, getSparkAddress } from './utxo-api/wallet.js';
 import { fetchGitHubKnowledge } from './knowledge/github-fetcher.js';
 import { postContentTweet } from './content/scheduler.js';
 import { cronTasks, type CronBehavior, type CronTaskInfo } from './cron-registry.js';
+import { enqueueCron, currentRunning, pendingJobs } from './cron-queue.js';
 
 const PORT = parseInt(process.env.PORT || '10000', 10);
 
@@ -63,34 +64,30 @@ async function main() {
 
   // ── Scheduled Jobs ──
 
-  // Helper to register a cron task in the registry
+  // Helper to register a cron task in the registry.
+  // Handlers are funneled through the serial queue so only one runs at a time.
   const HANDLER_TIMEOUT_MS = 2 * 60_000; // 2 min max per cron handler
 
   function registerCron(name: CronBehavior, schedule: string, handler: () => Promise<void>) {
-    let executing = false;
     const startPaused = !AUTO_TWEET;
     const info: CronTaskInfo = {
-      task: cron.schedule(schedule, async () => {
-        if (executing) {
-          console.warn(`[cron] ${name} still running, skipping overlapping execution.`);
-          return;
-        }
-        executing = true;
-        info.lastRunAt = new Date();
-        try {
-          await Promise.race([
-            handler(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`${name} handler timed out after ${HANDLER_TIMEOUT_MS / 1000}s`)), HANDLER_TIMEOUT_MS),
-            ),
-          ]);
-          info.lastError = null;
-        } catch (err: any) {
-          info.lastError = err?.message || String(err);
-          console.error(`[cron] ${name} error:`, err);
-        } finally {
-          executing = false;
-        }
+      task: cron.schedule(schedule, () => {
+        // Enqueue the handler — the serial queue runs it when the slot is free
+        enqueueCron(name, async () => {
+          info.lastRunAt = new Date();
+          try {
+            await Promise.race([
+              handler(),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error(`${name} handler timed out after ${HANDLER_TIMEOUT_MS / 1000}s`)), HANDLER_TIMEOUT_MS),
+              ),
+            ]);
+            info.lastError = null;
+          } catch (err: any) {
+            info.lastError = err?.message || String(err);
+            console.error(`[cron] ${name} error:`, err);
+          }
+        });
       }),
       schedule,
       running: true,
@@ -156,6 +153,7 @@ async function main() {
   console.log(`  Mention checks: ${MENTIONS_CRON}`);
   console.log(`  Engagement: ${ENGAGEMENT_CRON}`);
   console.log(`  Auto-tweet: ${AUTO_TWEET ? 'ON' : 'OFF (paused)'}`);
+  console.log(`  Cron execution: SERIAL (one at a time)`);
 }
 
 main().catch(err => {
