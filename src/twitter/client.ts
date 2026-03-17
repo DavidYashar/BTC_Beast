@@ -1,4 +1,4 @@
-import { TwitterApi } from 'twitter-api-v2';
+import { TwitterApi, ApiResponseError } from 'twitter-api-v2';
 
 // ── Client singleton ──
 
@@ -10,7 +10,11 @@ const TWITTER_TIMEOUT_MS = 30_000;
 const MIN_API_DELAY_MS = 2_000; // minimum gap between Twitter API calls
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 3_000;
+const MAX_RATE_LIMIT_WAIT_MS = 10 * 60_000; // don't wait longer than 10 min for rate reset
 let lastApiCallAt = 0;
+
+// Global rate-limit gate: epoch seconds when the write-rate window resets
+let rateLimitResetAt = 0;
 
 // Cache our own user ID (needed for mentions endpoint)
 let _myUserId: string | null = null;
@@ -25,12 +29,31 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 async function rateLimit(): Promise<void> {
+  // If a previous call hit 429, wait until the reset window before proceeding
+  if (rateLimitResetAt > 0) {
+    const waitMs = rateLimitResetAt * 1000 - Date.now();
+    if (waitMs > 0 && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
+      console.log(`[twitter] Rate-limited — waiting ${Math.ceil(waitMs / 1000)}s until reset...`);
+      await new Promise((r) => setTimeout(r, waitMs + 1_000)); // +1s buffer
+      rateLimitResetAt = 0;
+    } else if (waitMs > MAX_RATE_LIMIT_WAIT_MS) {
+      throw new Error(`Rate limit resets in ${Math.ceil(waitMs / 60_000)}min — too long to wait`);
+    }
+  }
+
   const now = Date.now();
   const elapsed = now - lastApiCallAt;
   if (elapsed < MIN_API_DELAY_MS) {
     await new Promise((r) => setTimeout(r, MIN_API_DELAY_MS - elapsed));
   }
   lastApiCallAt = Date.now();
+}
+
+function is429Error(err: unknown): number | null {
+  if (err instanceof ApiResponseError && err.code === 429) {
+    return err.rateLimit?.reset ?? null;
+  }
+  return null;
 }
 
 function isAuthError(err: unknown): boolean {
@@ -96,6 +119,27 @@ async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
     } catch (err) {
       lastErr = err;
       const isLast = attempt === MAX_RETRIES;
+
+      // On 429, store the global reset timestamp so ALL callers respect it
+      const resetEpoch = is429Error(err);
+      if (resetEpoch) {
+        rateLimitResetAt = resetEpoch;
+        const waitSec = Math.max(0, resetEpoch - Math.floor(Date.now() / 1000));
+        console.warn(
+          `[twitter] ${label} hit 429 rate limit — resets in ${waitSec}s (attempt ${attempt}/${MAX_RETRIES})`,
+        );
+        if (isLast) break;
+        // Wait until reset + 1s buffer instead of blind backoff
+        const waitMs = waitSec * 1000 + 1_000;
+        if (waitMs > MAX_RATE_LIMIT_WAIT_MS) {
+          console.warn(`[twitter] ${label} rate limit wait too long (${waitSec}s) — giving up.`);
+          break;
+        }
+        console.log(`[twitter] ${label} waiting ${waitSec + 1}s for rate limit reset...`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+
       console.error(`[twitter] ${label} attempt ${attempt}/${MAX_RETRIES} failed:`, err);
 
       if (isLast) break;
