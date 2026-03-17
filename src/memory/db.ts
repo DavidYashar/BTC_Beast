@@ -18,12 +18,11 @@ export function getPool(): pg.Pool {
     _pool = new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl,
-      max: 5,                        // serial cron queue means fewer concurrent queries
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
+      max: 2,                        // Keep low — Render basic-256mb proxy chokes on parallel auth
+      idleTimeoutMillis: 10_000,      // release idle connections faster (Render kills them anyway)
+      connectionTimeoutMillis: 15_000, // give Render proxy more time to handshake
       statement_timeout: 30_000,
-      keepAlive: true,               // prevent Render proxy from killing idle sockets
-      keepAliveInitialDelayMillis: 10_000,
+      allowExitOnIdle: true,          // let pool drain fully when idle — avoids stale sockets
     });
 
     // Log pool-level errors (e.g. idle client disconnect) so they don't crash the process
@@ -40,6 +39,40 @@ export const pool = new Proxy({} as pg.Pool, {
     return Reflect.get(getPool(), prop, receiver);
   },
 });
+
+/**
+ * Force-reset the pool — destroys all connections and creates a fresh pool.
+ * Use when connections are suspected stale (e.g. after repeated timeouts).
+ */
+export async function resetPool(): Promise<void> {
+  if (_pool) {
+    try { await _pool.end(); } catch { /* ignore */ }
+    _pool = null;
+  }
+}
+
+/**
+ * Verify PG connectivity with a lightweight probe.
+ * On failure, resets the pool and retries once with a fresh connection.
+ * Returns true if PG is reachable, false otherwise.
+ */
+export async function warmDb(): Promise<boolean> {
+  try {
+    await getPool().query('SELECT 1');
+    return true;
+  } catch (err: any) {
+    console.warn(`[pg-pool] Connection probe failed: ${err.message}. Resetting pool...`);
+    await resetPool();
+    try {
+      await getPool().query('SELECT 1');
+      console.log('[pg-pool] Reconnected after pool reset.');
+      return true;
+    } catch (retryErr: any) {
+      console.error(`[pg-pool] Reconnect failed: ${retryErr.message}. PG unreachable.`);
+      return false;
+    }
+  }
+}
 
 export async function closePool(): Promise<void> {
   if (_pool) {

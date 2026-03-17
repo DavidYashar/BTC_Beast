@@ -8,6 +8,7 @@
  */
 
 import type { CronBehavior } from './cron-registry.js';
+import { warmDb } from './memory/db.js';
 
 export interface QueueEntry {
   name: CronBehavior;
@@ -61,6 +62,14 @@ async function processQueue(): Promise<void> {
     const waitMs = Date.now() - entry.enqueuedAt;
     currentJob = entry.name;
     console.log(`[queue] ▶ ${entry.name} (waited ${(waitMs / 1000).toFixed(1)}s, ${queue.length} remaining)`);
+
+    // Warm-check PG before running the handler — resets pool if stale
+    const pgOk = await warmDb();
+    if (!pgOk) {
+      console.error(`[queue] ✕ ${entry.name} skipped — PG unreachable after retry`);
+      currentJob = null;
+      continue;
+    }
 
     try {
       await entry.handler();
