@@ -43,11 +43,22 @@ export const pool = new Proxy({} as pg.Pool, {
 /**
  * Force-reset the pool — destroys all connections and creates a fresh pool.
  * Use when connections are suspected stale (e.g. after repeated timeouts).
+ * pool.end() is capped at 5 s — zombie connections from Render's PG proxy
+ * can make it hang forever, which kills the tick loop.
  */
 export async function resetPool(): Promise<void> {
   if (_pool) {
-    try { await _pool.end(); } catch { /* ignore */ }
-    _pool = null;
+    const dyingPool = _pool;
+    _pool = null; // detach immediately so new queries get a fresh pool
+    try {
+      await Promise.race([
+        dyingPool.end(),
+        new Promise<void>((resolve) => setTimeout(() => {
+          console.warn('[pg-pool] pool.end() timed out after 5 s — abandoning old pool');
+          resolve();
+        }, 5_000)),
+      ]);
+    } catch { /* ignore */ }
   }
 }
 

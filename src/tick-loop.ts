@@ -13,6 +13,7 @@ import { warmDb } from './memory/db.js';
 
 const TICK_INTERVAL_MS = 60_000; // 60 s between ticks
 const HANDLER_TIMEOUT_MS = 2 * 60_000; // 2 min max per handler
+const TICK_HARD_TIMEOUT_MS = 3 * 60_000; // 3 min absolute ceiling per tick
 const HEARTBEAT_EVERY = 10; // log heartbeat every N ticks
 
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -54,7 +55,12 @@ export function nextDueBehaviors(): CronBehavior[] {
 function scheduleNext(): void {
   loopTimer = setTimeout(async () => {
     try {
-      await tick();
+      await Promise.race([
+        tick(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('tick() hard-timeout after 3 min')), TICK_HARD_TIMEOUT_MS),
+        ),
+      ]);
       consecutiveTickErrors = 0;
     } catch (err) {
       consecutiveTickErrors++;
