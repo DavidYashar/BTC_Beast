@@ -106,3 +106,13 @@ main().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+
+
+// Safety net — never let an unhandled rejection silently kill the process
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] Unhandled rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[process] Uncaught exception:', err);
+  // Don't exit — the tick loop and Express should keep running
+});

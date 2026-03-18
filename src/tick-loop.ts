@@ -13,10 +13,12 @@ import { warmDb } from './memory/db.js';
 
 const TICK_INTERVAL_MS = 60_000; // 60 s between ticks
 const HANDLER_TIMEOUT_MS = 2 * 60_000; // 2 min max per handler
+const HEARTBEAT_EVERY = 10; // log heartbeat every N ticks
 
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
 let currentJob: CronBehavior | null = null;
 let tickCount = 0;
+let consecutiveTickErrors = 0;
 
 /** Start the tick loop.  Safe to call multiple times (no-ops if already running). */
 export function startLoop(): void {
@@ -51,7 +53,13 @@ export function nextDueBehaviors(): CronBehavior[] {
 
 function scheduleNext(): void {
   loopTimer = setTimeout(async () => {
-    await tick();
+    try {
+      await tick();
+      consecutiveTickErrors = 0;
+    } catch (err) {
+      consecutiveTickErrors++;
+      console.error(`[tick] UNHANDLED tick error (#${consecutiveTickErrors}):`, err);
+    }
     if (loopTimer !== null) scheduleNext(); // chain only if not stopped
   }, TICK_INTERVAL_MS);
 }
@@ -59,6 +67,14 @@ function scheduleNext(): void {
 async function tick(): Promise<void> {
   tickCount++;
   const now = Date.now();
+
+  // Periodic heartbeat so we can confirm the loop is alive in logs
+  if (tickCount % HEARTBEAT_EVERY === 0) {
+    const dueBehaviors = [...behaviors.entries()]
+      .filter(([, b]) => b.enabled && now - b.lastRunAt >= b.intervalMs)
+      .map(([name]) => name);
+    console.log(`[tick] ♥ heartbeat — tick #${tickCount}, uptime ${Math.floor(process.uptime())}s, due: [${dueBehaviors.join(', ') || 'none'}]`);
+  }
 
   // One PG health check per tick
   const pgOk = await warmDb();
