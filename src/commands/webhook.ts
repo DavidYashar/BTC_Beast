@@ -6,8 +6,8 @@ import { postTweet } from '../twitter/client.js';
 import { recordTweet, remember } from '../memory/store.js';
 import { pool } from '../memory/db.js';
 import { initWallet, getSparkAddress } from '../utxo-api/wallet.js';
-import { cronTasks, type CronBehavior } from '../cron-registry.js';
-import { currentRunning, pendingJobs } from '../cron-queue.js';
+import { behaviors, type CronBehavior } from '../cron-registry.js';
+import { currentRunning, nextDueBehaviors } from '../tick-loop.js';
 import { filterLLMOutput } from '../twitter/safety.js';
 import {
   fetchBalance,
@@ -405,7 +405,7 @@ export function createCommandServer(): express.Express {
 
   // ── Twitter Cron Control Commands ──
 
-  const ALL_BEHAVIORS: CronBehavior[] = ['trending', 'mentions', 'engagement', 'self-promo', 's402', 'wallet', 'content', 'pruning', 'knowledge-refresh'];
+  const ALL_BEHAVIORS: CronBehavior[] = ['mentions', 'engagement', 'content', 'trending', 'self-promo', 's402', 'wallet', 'pruning', 'knowledge-refresh'];
 
   function parseBehaviors(body: { behaviors?: string[] }): CronBehavior[] {
     if (!body.behaviors || body.behaviors.includes('all')) return ALL_BEHAVIORS;
@@ -414,7 +414,7 @@ export function createCommandServer(): express.Express {
 
   /**
    * POST /commands/start-tweeting
-   * Resume Twitter cron jobs.
+   * Resume Twitter behaviors.
    * Body: { "behaviors": ["trending", "mentions", "engagement"] }
    *   - Omit behaviors or pass ["all"] to start everything.
    */
@@ -424,16 +424,15 @@ export function createCommandServer(): express.Express {
       const results: Record<string, string> = {};
 
       for (const name of targets) {
-        const info = cronTasks.get(name);
-        if (!info) {
+        const entry = behaviors.get(name);
+        if (!entry) {
           results[name] = 'not_found';
           continue;
         }
-        if (info.running) {
+        if (entry.enabled) {
           results[name] = 'already_running';
         } else {
-          info.task.start();
-          info.running = true;
+          entry.enabled = true;
           results[name] = 'started';
         }
       }
@@ -453,7 +452,7 @@ export function createCommandServer(): express.Express {
 
   /**
    * POST /commands/stop-tweeting
-   * Pause Twitter cron jobs.
+   * Pause Twitter behaviors.
    * Body: { "behaviors": ["trending", "mentions", "engagement"] }
    *   - Omit behaviors or pass ["all"] to stop everything.
    */
@@ -463,16 +462,15 @@ export function createCommandServer(): express.Express {
       const results: Record<string, string> = {};
 
       for (const name of targets) {
-        const info = cronTasks.get(name);
-        if (!info) {
+        const entry = behaviors.get(name);
+        if (!entry) {
           results[name] = 'not_found';
           continue;
         }
-        if (!info.running) {
+        if (!entry.enabled) {
           results[name] = 'already_stopped';
         } else {
-          info.task.stop();
-          info.running = false;
+          entry.enabled = false;
           results[name] = 'stopped';
         }
       }
@@ -492,27 +490,33 @@ export function createCommandServer(): express.Express {
 
   /**
    * GET /commands/cron-status
-   * Show which cron behaviors are active/paused, their schedules, and last run info.
+   * Show which behaviors are active/paused, their intervals, and last run info.
    */
   app.get('/commands/cron-status', async (_req: Request, res: Response) => {
     try {
-      const behaviors: Record<string, {
-        schedule: string;
-        running: boolean;
+      const list: Record<string, {
+        intervalMs: number;
+        enabled: boolean;
         lastRunAt: string | null;
         lastError: string | null;
+        dailyHourUtc?: number;
       }> = {};
 
-      for (const [name, info] of cronTasks) {
-        behaviors[name] = {
-          schedule: info.schedule,
-          running: info.running,
-          lastRunAt: info.lastRunAt?.toISOString() ?? null,
-          lastError: info.lastError,
+      for (const [name, entry] of behaviors) {
+        list[name] = {
+          intervalMs: entry.intervalMs,
+          enabled: entry.enabled,
+          lastRunAt: entry.lastRunAt ? new Date(entry.lastRunAt).toISOString() : null,
+          lastError: entry.lastError,
+          ...(entry.dailyHourUtc !== undefined ? { dailyHourUtc: entry.dailyHourUtc } : {}),
         };
       }
 
-      res.json({ ok: true, behaviors, queue: { executing: currentRunning(), pending: pendingJobs() } });
+      res.json({
+        ok: true,
+        behaviors: list,
+        loop: { executing: currentRunning(), nextDue: nextDueBehaviors() },
+      });
     } catch (err: any) {
       res.status(500).json({ error: safeErrorMessage(err) });
     }

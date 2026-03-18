@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import * as cron from 'node-cron';
 import { initDb } from './memory/init-db.js';
 import { ingestKnowledge } from './memory/ingest-knowledge.js';
 import { createCommandServer } from './commands/webhook.js';
@@ -13,22 +12,18 @@ import { pruneMemories } from './memory/store.js';
 import { initWallet, getSparkAddress } from './utxo-api/wallet.js';
 import { fetchGitHubKnowledge } from './knowledge/github-fetcher.js';
 import { postContentTweet } from './content/scheduler.js';
-import { cronTasks, type CronBehavior, type CronTaskInfo } from './cron-registry.js';
-import { enqueueCron, currentRunning, pendingJobs } from './cron-queue.js';
+import { registerBehavior } from './cron-registry.js';
+import { startLoop } from './tick-loop.js';
 
 const PORT = parseInt(process.env.PORT || '10000', 10);
 
-// Intervals (in cron syntax)
-const TRENDING_CRON = process.env.TRENDING_CRON || '0 */4 * * *'; // every 4 hours
-const MENTIONS_CRON = process.env.MENTIONS_CRON || '*/5 * * * *'; // every 5 minutes
-const ENGAGEMENT_CRON = process.env.ENGAGEMENT_CRON || '*/15 * * * *'; // every 15 minutes
-const SELF_PROMO_CRON = process.env.SELF_PROMO_CRON || '0 14 * * *'; // daily at 14:00 UTC
-const S402_CRON = process.env.S402_CRON || '0 18 * * *'; // daily at 18:00 UTC
-const WALLET_CRON = process.env.WALLET_CRON || '0 22 * * *'; // daily at 22:00 UTC
-const CONTENT_CRON = process.env.CONTENT_CRON || '0 */3 * * *'; // every 3 hours
-
-// When false/unset, crons start paused — use POST /commands/start-tweeting to enable
+// When false/unset, behaviors start disabled — use POST /commands/start-tweeting to enable
 const AUTO_TWEET = process.env.AUTO_TWEET === 'true';
+
+// Interval helpers
+const MIN  = 60_000;
+const HOUR = 60 * MIN;
+const DAY  = 24 * HOUR;
 
 async function main() {
   console.log('🐂 BTC Beast starting up...');
@@ -62,98 +57,49 @@ async function main() {
     console.log(`Command server listening on port ${PORT}`);
   });
 
-  // ── Scheduled Jobs ──
+  // ── Register behaviors in priority order (user-facing first) ──
 
-  // Helper to register a cron task in the registry.
-  // Handlers are funneled through the serial queue so only one runs at a time.
-  const HANDLER_TIMEOUT_MS = 2 * 60_000; // 2 min max per cron handler
+  const enabled = AUTO_TWEET;
 
-  function registerCron(name: CronBehavior, schedule: string, handler: () => Promise<void>) {
-    const startPaused = !AUTO_TWEET;
-    const info: CronTaskInfo = {
-      task: cron.schedule(schedule, () => {
-        // Enqueue the handler — the serial queue runs it when the slot is free
-        enqueueCron(name, async () => {
-          info.lastRunAt = new Date();
-          try {
-            await Promise.race([
-              handler(),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error(`${name} handler timed out after ${HANDLER_TIMEOUT_MS / 1000}s`)), HANDLER_TIMEOUT_MS),
-              ),
-            ]);
-            info.lastError = null;
-          } catch (err: any) {
-            info.lastError = err?.message || String(err);
-            console.error(`[cron] ${name} error:`, err);
-          }
-        });
-      }),
-      schedule,
-      running: true,
-      lastRunAt: null,
-      lastError: null,
-    };
-    if (startPaused) {
-      info.task.stop();
-      info.running = false;
-    }
-    cronTasks.set(name, info);
-  }
+  registerBehavior('mentions',     handleMentions,       5 * MIN,  { enabled });
+  registerBehavior('engagement',   engageWithMentions,  15 * MIN,  { enabled });
+  registerBehavior('content',      postContentTweet,     3 * HOUR, { enabled });
+  registerBehavior('trending',     postTrendingTweet,    4 * HOUR, { enabled });
+  registerBehavior('self-promo',   postSelfPromoTweet,   DAY,      { enabled, dailyHourUtc: 14 });
+  registerBehavior('s402',         postS402Tweet,        DAY,      { enabled, dailyHourUtc: 18 });
+  registerBehavior('wallet',       postWalletTweet,      DAY,      { enabled, dailyHourUtc: 22 });
 
-  registerCron('trending', TRENDING_CRON, postTrendingTweet);
-  registerCron('mentions', MENTIONS_CRON, handleMentions);
-  registerCron('engagement', ENGAGEMENT_CRON, engageWithMentions);
-  registerCron('self-promo', SELF_PROMO_CRON, postSelfPromoTweet);
-  registerCron('s402', S402_CRON, postS402Tweet);
-  registerCron('wallet', WALLET_CRON, postWalletTweet);
-  registerCron('content', CONTENT_CRON, postContentTweet);
-
-  // Daily memory pruning at 3:00 AM UTC
-  registerCron('pruning', '0 3 * * *', async () => {
+  registerBehavior('pruning', async () => {
     const result = await pruneMemories();
     const total = result.memories + result.tweets + result.snapshots + result.mentions;
     if (total > 0) {
       console.log(`[pruning] Cleaned: ${result.memories} memories, ${result.tweets} tweets, ${result.snapshots} snapshots, ${result.mentions} mentions`);
     }
-  });
+  }, DAY, { enabled: true, dailyHourUtc: 3 });
 
-  // Daily GitHub knowledge refresh at 4:00 AM UTC
-  registerCron('knowledge-refresh', '0 4 * * *', async () => {
+  registerBehavior('knowledge-refresh', async () => {
     const updated = await fetchGitHubKnowledge();
     if (updated > 0) {
       console.log(`[knowledge-refresh] ${updated} file(s) updated, re-ingesting...`);
       await ingestKnowledge();
     }
-  });
+  }, DAY, { enabled: true, dailyHourUtc: 4 });
 
-  // Run initial tasks on startup (after a short delay) — only if AUTO_TWEET is enabled
-  if (AUTO_TWEET) {
-    setTimeout(async () => {
-      console.log('[startup] Running initial trending tweet...');
-      const info = cronTasks.get('trending');
-      try {
-        await postTrendingTweet();
-        if (info) { info.lastRunAt = new Date(); info.lastError = null; }
-      } catch (err: any) {
-        console.error('[startup] Initial trending tweet failed:', err);
-        if (info) { info.lastRunAt = new Date(); info.lastError = err?.message || String(err); }
-      }
-    }, 10_000);
-  } else {
-    console.log('[startup] AUTO_TWEET is off — tweeting paused. Use POST /commands/start-tweeting to enable.');
-  }
+  // Start the single tick loop (one handler at a time, setTimeout chain)
+  startLoop();
 
   console.log('🐂 BTC Beast is running.');
-  console.log(`  Trending tweets: ${TRENDING_CRON}`);
-  console.log(`  Self-promo ($Beast): ${SELF_PROMO_CRON}`);
-  console.log(`  S402 protocol: ${S402_CRON}`);
-  console.log(`  UTXO Wallet: ${WALLET_CRON}`);
-  console.log(`  Content engine: ${CONTENT_CRON}`);
-  console.log(`  Mention checks: ${MENTIONS_CRON}`);
-  console.log(`  Engagement: ${ENGAGEMENT_CRON}`);
+  console.log(`  Mentions:          every 5 min`);
+  console.log(`  Engagement:        every 15 min`);
+  console.log(`  Content engine:    every 3 hours`);
+  console.log(`  Trending tweets:   every 4 hours`);
+  console.log(`  Self-promo ($Beast): daily ~14:00 UTC`);
+  console.log(`  S402 protocol:     daily ~18:00 UTC`);
+  console.log(`  UTXO Wallet:       daily ~22:00 UTC`);
+  console.log(`  Pruning:           daily ~03:00 UTC`);
+  console.log(`  Knowledge refresh: daily ~04:00 UTC`);
   console.log(`  Auto-tweet: ${AUTO_TWEET ? 'ON' : 'OFF (paused)'}`);
-  console.log(`  Cron execution: SERIAL (one at a time)`);
+  console.log(`  Execution: SERIAL tick loop (one at a time, no overlap)`);
 }
 
 main().catch(err => {
